@@ -84,6 +84,12 @@ logs: check-kubectl ## Tail exporter logs from Kubernetes.
 port-forward: check-kubectl ## Port-forward the exporter Service to localhost:PORT.
 	$(KUBECTL) port-forward -n $(KUBE_NAMESPACE) service/vmss-metrics-exporter $(PORT):8000
 
+.PHONY: av-workload-script
+av-workload-script: check-kubectl ## Publish scripts/av_lustre_workload.py as a ConfigMap.
+	$(KUBECTL) -n lustre-pressure-test create configmap av-lustre-workload-script \
+		--from-file=av_lustre_workload.py=scripts/av_lustre_workload.py \
+		--dry-run=client -o yaml | $(KUBECTL) apply -f -
+
 .PHONY: print-image
 print-image: ## Print the resolved image reference.
 	@echo $(IMAGE_REF)

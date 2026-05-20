@@ -1,0 +1,86 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: av-dataset-discovery
+  namespace: lustre-pressure-test
+  labels:
+    app.kubernetes.io/name: av-lustre-workload
+    app.kubernetes.io/component: discovery
+    app.kubernetes.io/part-of: azure-managed-lustre-pressure-test
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: av-lustre-workload
+        app.kubernetes.io/component: discovery
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        kubernetes.azure.com/agentpool: juicefspool
+      containers:
+        - name: discover
+          image: python:3.12-slim
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: MODE
+              value: discover
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_COUNT
+              value: "1"
+            - name: JOB_COMPLETION_INDEX
+              value: "0"
+            - name: DATASET_ROOT
+              valueFrom:
+                configMapKeyRef:
+                  name: av-lustre-workload-config
+                  key: DATASET_ROOT
+            - name: EXCLUDE_PATHS
+              valueFrom:
+                configMapKeyRef:
+                  name: av-lustre-workload-config
+                  key: EXCLUDE_PATHS
+            - name: SMALL_MAX_BYTES
+              valueFrom:
+                configMapKeyRef:
+                  name: av-lustre-workload-config
+                  key: SMALL_MAX_BYTES
+            - name: MEDIUM_MAX_BYTES
+              valueFrom:
+                configMapKeyRef:
+                  name: av-lustre-workload-config
+                  key: MEDIUM_MAX_BYTES
+            - name: LARGE_MAX_BYTES
+              valueFrom:
+                configMapKeyRef:
+                  name: av-lustre-workload-config
+                  key: LARGE_MAX_BYTES
+          command:
+            - python
+            - /opt/av/av_lustre_workload.py
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "512Mi"
+            limits:
+              cpu: "2"
+              memory: "2Gi"
+          volumeMounts:
+            - name: lustre
+              mountPath: /mnt/lustre
+              readOnly: true
+            - name: av-script
+              mountPath: /opt/av
+              readOnly: true
+      volumes:
+        - name: lustre
+          persistentVolumeClaim:
+            claimName: lustre-pressure-test-pvc
+        - name: av-script
+          configMap:
+            name: av-lustre-workload-script
+            defaultMode: 0o755

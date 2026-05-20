@@ -1,0 +1,164 @@
+---
+# ServiceAccount federated to the user-assigned MI `mi-waymo-copy` in `aks-test-rg`.
+# The MI has `Storage Blob Data Contributor` on the `waymo-v2` container of
+# `oidcissuer6c7a332c` only — no broader storage-account access.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: waymo-copy
+  namespace: lustre-pressure-test
+  labels:
+    app.kubernetes.io/name: waymo-blob-copy
+    app.kubernetes.io/part-of: azure-managed-lustre-pressure-test
+    azure.workload.identity/use: "true"
+  annotations:
+    # clientId of mi-waymo-copy (sub-scope: container `waymo-v2`).
+    azure.workload.identity/client-id: ab01bc3e-e8da-40fa-b9b8-43e527612a18
+    azure.workload.identity/tenant-id: 16b3c013-d300-468d-ac64-7eda0820b6d3
+---
+---
+# Direct GCS -> Azure Blob copy. Source auth via authorized_user ADC JSON in a
+# Secret; destination auth via AKS workload identity (federated to the SA
+# above). The pod does not mount the Lustre PVC, so it is independent of any
+# Lustre issues. The Waymo Open Dataset is a sponsored public dataset on GCS,
+# so this transfer is free on the Google side; Azure same-region ingress is
+# also free.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: waymo-blob-copy
+  namespace: lustre-pressure-test
+  labels:
+    app.kubernetes.io/name: waymo-blob-copy
+    app.kubernetes.io/part-of: azure-managed-lustre-pressure-test
+spec:
+  backoffLimit: 2
+  # 8h deadline. Realistic ETA is 1-3h for 683 GiB at typical GCS->Azure
+  # cross-cloud throughput.
+  activeDeadlineSeconds: 28800
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: waymo-blob-copy
+        azure.workload.identity/use: "true"
+    spec:
+      serviceAccountName: waymo-copy
+      restartPolicy: OnFailure
+      nodeSelector:
+        kubernetes.azure.com/agentpool: juicefspool
+      containers:
+        - name: rclone
+          # rclone 1.69 has stable workload-identity support via DefaultAzureCredential
+          # (uses AZURE_FEDERATED_TOKEN_FILE injected by the WI webhook) and accepts
+          # both google-cloud-storage `service_account` and `authorized_user` ADC
+          # JSON via service_account_file. ~30 MiB image, no bootstrap needed.
+          image: rclone/rclone:1.69
+          imagePullPolicy: IfNotPresent
+          env:
+            # ----- Source remote (gcs:) -----
+            # The Google ADC JSON we have is `authorized_user` type, which
+            # rclone's `service_account_file` does NOT accept. Instead we feed
+            # rclone its native token format plus our OAuth client_id /
+            # client_secret so it can refresh access tokens on its own.
+            - name: RCLONE_CONFIG_GCS_TYPE
+              value: google cloud storage
+            - name: RCLONE_CONFIG_GCS_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: gcp-credentials
+                  key: client-id
+            - name: RCLONE_CONFIG_GCS_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: gcp-credentials
+                  key: client-secret
+            # token.json was pre-built locally: it is an rclone-style OAuth
+            # token blob {access_token,token_type,refresh_token,expiry} derived
+            # from the local gcloud authorized_user credentials.
+            - name: GCS_TOKEN_PATH
+              value: /secrets/gcp/token.json
+            # ----- Destination remote (az:) -----
+            - name: RCLONE_CONFIG_AZ_TYPE
+              value: azureblob
+            - name: RCLONE_CONFIG_AZ_ACCOUNT
+              value: oidcissuer6c7a332c
+            # use_az_ad + env_auth: rclone uses DefaultAzureCredential, which
+            # picks up AZURE_CLIENT_ID + AZURE_TENANT_ID + AZURE_FEDERATED_TOKEN_FILE
+            # injected by the AKS workload-identity webhook.
+            - name: RCLONE_CONFIG_AZ_USE_AZUREAD
+              value: "true"
+            - name: RCLONE_CONFIG_AZ_ENV_AUTH
+              value: "true"
+            # ----- Copy endpoints -----
+            - name: SOURCE
+              value: gcs:waymo_open_dataset_v_2_0_1
+            - name: DEST
+              value: az:waymo-v2
+            # ----- Tuning -----
+            - name: RCLONE_TRANSFERS
+              value: "32"
+            - name: RCLONE_CHECKERS
+              value: "16"
+            - name: RCLONE_BUFFER_SIZE
+              value: 32M
+            - name: RCLONE_STATS
+              value: 30s
+            - name: RCLONE_STATS_ONE_LINE
+              value: "true"
+            - name: RCLONE_LOG_LEVEL
+              value: INFO
+          command:
+            - /bin/sh
+            - -exc
+            - |
+              echo "=== $(date -u) verifying GCS credentials are mounted ==="
+              test -s "${GCS_TOKEN_PATH}" \
+                || { echo "ERROR: ${GCS_TOKEN_PATH} missing or empty" >&2; exit 1; }
+              # rclone takes the token as a JSON literal in env, so read it in
+              # and re-export.
+              export RCLONE_CONFIG_GCS_TOKEN="$(cat "${GCS_TOKEN_PATH}")"
+
+              echo "--- rclone version ---"
+              rclone version | head -3
+              echo "--- workload identity env (sanity) ---"
+              env | grep -E '^AZURE_(CLIENT_ID|TENANT_ID|FEDERATED_TOKEN_FILE)' | sort
+
+              echo "=== $(date -u) listing source bucket (smoke test) ==="
+              rclone lsd "${SOURCE}"
+
+              echo "=== $(date -u) verifying destination access (smoke test) ==="
+              rclone size "${DEST}" --max-depth=1 || true
+
+              echo "=== $(date -u) starting GCS -> Azure Blob copy ==="
+              # rclone copy is idempotent: it skips files whose size+mtime+
+              # checksum match, so a retry replays only what is missing.
+              # --fast-list reduces GCS list API calls dramatically.
+              # --metadata preserves source metadata when possible.
+              rclone copy "${SOURCE}" "${DEST}" \
+                  --fast-list \
+                  --metadata \
+                  --progress
+
+              echo "=== $(date -u) copy complete; final size at destination ==="
+              rclone size "${DEST}"
+              echo "=== $(date -u) done ==="
+          resources:
+            requests:
+              cpu: 1
+              memory: 2Gi
+            limits:
+              cpu: "4"
+              memory: 4Gi
+          volumeMounts:
+            - name: gcp-creds
+              mountPath: /secrets/gcp
+              readOnly: true
+            - name: rclone-state
+              mountPath: /tmp/rclone
+      volumes:
+        - name: gcp-creds
+          secret:
+            secretName: gcp-credentials
+        - name: rclone-state
+          emptyDir:
+            sizeLimit: 1Gi

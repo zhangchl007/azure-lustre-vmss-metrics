@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: lustre-pressure-test
+  labels:
+    app.kubernetes.io/name: lustre-pressure-test
+    app.kubernetes.io/part-of: azure-managed-lustre-pressure-test
+    purpose: storage-benchmark

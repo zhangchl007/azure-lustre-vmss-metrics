@@ -1,0 +1,34 @@
+# Compatibility RBAC for Azure Lustre CSI driver v0.4.0.
+#
+# The upgraded node plugin attempts to inspect and remove node taints after the
+# Lustre client is ready. The older manually installed driver manifest in this
+# cluster only granted secret permissions to csi-azurelustre-node-sa, which leaves
+# the driver functional but noisy. These permissions match the driver's node-taint
+# remediation behavior.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: csi-azurelustre-node-taint-role
+  labels:
+    app.kubernetes.io/name: csi-azurelustre-node
+    app.kubernetes.io/part-of: azure-managed-lustre-pressure-test
+rules:
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "watch", "patch", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: csi-azurelustre-node-taint-binding
+  labels:
+    app.kubernetes.io/name: csi-azurelustre-node
+    app.kubernetes.io/part-of: azure-managed-lustre-pressure-test
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: csi-azurelustre-node-taint-role
+subjects:
+  - kind: ServiceAccount
+    name: csi-azurelustre-node-sa
+    namespace: kube-system

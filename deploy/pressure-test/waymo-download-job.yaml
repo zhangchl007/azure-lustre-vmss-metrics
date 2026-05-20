@@ -1,0 +1,86 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: waymo-dataset-download
+  namespace: lustre-pressure-test
+  labels:
+    app.kubernetes.io/name: waymo-download
+    app.kubernetes.io/part-of: azure-managed-lustre-pressure-test
+spec:
+  backoffLimit: 3
+  # 24h deadline — large dataset
+  activeDeadlineSeconds: 86400
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: waymo-download
+    spec:
+      restartPolicy: OnFailure
+      nodeSelector:
+        kubernetes.azure.com/agentpool: juicefspool
+      containers:
+        - name: download
+          image: google/cloud-sdk:slim
+          env:
+            - name: GOOGLE_APPLICATION_CREDENTIALS
+              value: /secrets/gcp/adc.json
+            - name: CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE
+              value: /secrets/gcp/adc.json
+            - name: DEST
+              value: /mnt/lustre/waymo_v2
+            - name: BUCKET
+              value: gs://waymo_open_dataset_v_2_0_1
+          command:
+            - /bin/bash
+            - -exc
+            - |
+              echo "=== $(date -u) Starting Waymo download ==="
+              echo "Destination: ${DEST}"
+              echo "Source: ${BUCKET}"
+
+              # Activate authorized_user credentials via gcloud
+              gcloud auth login --cred-file="${GOOGLE_APPLICATION_CREDENTIALS}" --quiet 2>/dev/null \
+                || echo "Credential file loaded via env override"
+
+              # Verify auth
+              gcloud auth list
+              gcloud storage ls "${BUCKET}/" || { echo "ERROR: Cannot access bucket"; exit 1; }
+
+              mkdir -p "${DEST}"
+
+              # Check available disk space
+              df -h /mnt/lustre
+
+              # Download with gcloud storage (recommended over gsutil)
+              for split in training validation testing testing_location; do
+                echo "=== $(date -u) Downloading ${split} ==="
+                gcloud storage cp -r "${BUCKET}/${split}" "${DEST}/" 2>&1 | tail -50
+                echo "=== $(date -u) ${split} done ==="
+              done
+
+              # Summary
+              echo "=== Final disk usage ==="
+              df -h /mnt/lustre
+              echo "=== Dataset directory listing ==="
+              du -sh "${DEST}"/* 2>/dev/null || ls -la "${DEST}/"
+              echo "=== $(date -u) Download complete ==="
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1Gi
+            limits:
+              cpu: "2"
+              memory: 4Gi
+          volumeMounts:
+            - name: lustre
+              mountPath: /mnt/lustre
+            - name: gcp-creds
+              mountPath: /secrets/gcp
+              readOnly: true
+      volumes:
+        - name: lustre
+          persistentVolumeClaim:
+            claimName: lustre-pressure-test-pvc
+        - name: gcp-creds
+          secret:
+            secretName: gcp-credentials

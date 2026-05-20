@@ -1,0 +1,91 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: av-output-cleanup
+  namespace: lustre-pressure-test
+  labels:
+    app.kubernetes.io/name: av-lustre-workload
+    app.kubernetes.io/component: cleanup
+    app.kubernetes.io/part-of: azure-managed-lustre-pressure-test
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: av-lustre-workload
+        app.kubernetes.io/component: cleanup
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        kubernetes.azure.com/agentpool: juicefspool
+      containers:
+        - name: cleanup
+          image: python:3.12-slim
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: RESULT_ROOT
+              valueFrom:
+                configMapKeyRef:
+                  name: av-lustre-workload-config
+                  key: RESULT_ROOT
+            - name: RUN_ID
+              valueFrom:
+                configMapKeyRef:
+                  name: av-lustre-workload-config
+                  key: RUN_ID
+            - name: DATASET_ROOT
+              valueFrom:
+                configMapKeyRef:
+                  name: av-lustre-workload-config
+                  key: DATASET_ROOT
+          command:
+            - python
+            - -c
+            - |
+              import os
+              import shutil
+              import sys
+              from pathlib import Path
+
+              result_root = Path(os.environ["RESULT_ROOT"]).resolve()
+              run_id = os.environ["RUN_ID"].strip()
+              dataset_root = Path(os.environ["DATASET_ROOT"]).resolve()
+
+              if not run_id or "/" in run_id or run_id in (".", ".."):
+                  sys.exit(f"refusing to clean up suspicious RUN_ID: {run_id!r}")
+
+              run_dir = (result_root / run_id).resolve()
+              try:
+                  run_dir.relative_to(result_root)
+              except ValueError:
+                  sys.exit(f"refusing to clean up outside RESULT_ROOT: {run_dir}")
+
+              if run_dir == dataset_root or dataset_root in run_dir.parents:
+                  sys.exit("refusing to clean up: run dir overlaps DATASET_ROOT")
+              if run_dir in dataset_root.parents:
+                  sys.exit("refusing to clean up: run dir is an ancestor of DATASET_ROOT")
+
+              if not run_dir.exists():
+                  print(f"nothing to clean up at {run_dir}")
+                  sys.exit(0)
+
+              # Final sanity check: every element under run_dir must resolve inside
+              # run_dir (no symlink escapes).
+              for path in run_dir.rglob("*"):
+                  try:
+                      resolved = path.resolve()
+                      resolved.relative_to(run_dir)
+                  except ValueError:
+                      sys.exit(f"refusing to clean up: {path} escapes {run_dir}")
+
+              print(f"removing {run_dir}")
+              shutil.rmtree(run_dir)
+              print("cleanup complete")
+          volumeMounts:
+            - name: lustre
+              mountPath: /mnt/lustre
+      volumes:
+        - name: lustre
+          persistentVolumeClaim:
+            claimName: lustre-pressure-test-pvc

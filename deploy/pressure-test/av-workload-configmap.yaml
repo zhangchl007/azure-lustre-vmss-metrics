@@ -1,0 +1,104 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: av-lustre-workload-config
+  namespace: lustre-pressure-test
+  labels:
+    app.kubernetes.io/name: av-lustre-workload
+    app.kubernetes.io/part-of: azure-managed-lustre-pressure-test
+data:
+  # ---- Required paths (override per run) ------------------------------------
+  # Point DATASET_ROOT at the real AV dataset directory on Lustre.
+  # Outputs are isolated under RESULT_ROOT/<RUN_ID>/<pod-name>/.
+  # The simulator aborts at startup if DATASET_ROOT and RESULT_ROOT overlap,
+  # and rejects any output write whose resolved path falls under DATASET_ROOT.
+  DATASET_ROOT: /mnt/lustre/waymo_v2
+  RESULT_ROOT: /mnt/lustre/pressure-tests/av-results
+  RUN_ID: av-run-001
+
+  # ---- Scope filters (per-phase, default = walk everything) -----------------
+  # SPLIT_FILTER: comma-separated list of first-level directory names under
+  # DATASET_ROOT (or under SUBPATH when set) to descend into. Empty = no filter.
+  # Example: "training,validation".
+  SPLIT_FILTER: ""
+  # SUBPATH: relative path under DATASET_ROOT that becomes the effective walk
+  # root for this phase. Must not contain ".." and must not start with "/".
+  # Example: "training/camera_image".
+  SUBPATH: ""
+
+  # ---- Concurrency ----------------------------------------------------------
+  POD_COUNT: "10"
+
+  # ---- Per-pod work budget --------------------------------------------------
+  # FILES_PER_POD=0 means "no cap"; the simulator processes the pod's full
+  # shard. MAX_BYTES_PER_POD=0 means "no byte cap".
+  FILES_PER_POD: "0"
+  MAX_BYTES_PER_POD: "0"
+
+  # ---- Read behaviour -------------------------------------------------------
+  CHUNK_SIZE_BYTES: "4MiB"
+  VERIFY_READS: "true"
+  FAIL_ON_READ_ERROR: "true"
+  # Access pattern per file: full | random-offset | head-tail
+  READ_PATTERN: "full"
+  RANDOM_OFFSET_READS: "4"
+  # Repeat the shard multiple times to simulate multi-epoch training-like access.
+  EPOCHS: "1"
+  # Drop latency samples collected during this many seconds so cold-cache reads
+  # do not pollute steady-state percentiles.
+  WARMUP_SECONDS: "0"
+  # Number of dataset-wide top-K largest files every pod re-reads per epoch.
+  # Simulates AV common maps/models/calibration files.
+  HOTSET_COUNT: "0"
+
+  # ---- Size buckets ---------------------------------------------------------
+  SMALL_MAX_BYTES: "1MiB"
+  MEDIUM_MAX_BYTES: "64MiB"
+  LARGE_MAX_BYTES: "512MiB"
+
+  # ---- Output behaviour -----------------------------------------------------
+  # Output is a small JSON sidecar per input file plus an optional synthetic
+  # payload proportional to input size (capped per file).
+  OUTPUT_BYTES_PER_INPUT: "0.001"
+  MAX_OUTPUT_BYTES_PER_FILE: "1MiB"
+  FAIL_ON_WRITE_ERROR: "true"
+
+  # ---- Telemetry ------------------------------------------------------------
+  STATS_INTERVAL_SECONDS: "30"
+  MAX_RECORDED_ERRORS: "20"
+  # Per-bucket p95 latency thresholds (ms). When FAIL_ON_SLO=true, the pod
+  # exits with code 4 on any breach so kubectl wait surfaces the failure.
+  # Defaults are loosened from the original runbook because Waymo medium files
+  # are Parquet shards with per-row-group seeks.
+  BUCKET_SLO_P95_MS: "small=20,medium=300,large=3000,xlarge=8000"
+  FAIL_ON_SLO: "false"
+
+  # ---- Safety ---------------------------------------------------------------
+  # Paths under DATASET_ROOT to exclude from enumeration. Colon-separated.
+  # The simulator automatically excludes RESULT_ROOT so output writes are not
+  # read back during the same run.
+  EXCLUDE_PATHS: "/mnt/lustre/pressure-tests"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: av-lustre-workload-script
+  namespace: lustre-pressure-test
+  labels:
+    app.kubernetes.io/name: av-lustre-workload
+    app.kubernetes.io/part-of: azure-managed-lustre-pressure-test
+data:
+  # Pre-populated by `make av-workload-configmap` (see Makefile) or refreshed
+  # manually via:
+  #   kubectl -n lustre-pressure-test create configmap av-lustre-workload-script \
+  #     --from-file=av_lustre_workload.py=scripts/av_lustre_workload.py \
+  #     --dry-run=client -o yaml | kubectl apply -f -
+  av_lustre_workload.py: |
+    # placeholder — replace with scripts/av_lustre_workload.py contents before
+    # applying. This ConfigMap is intentionally left as a stub in source so the
+    # script remains a single source of truth.
+    raise SystemExit(
+        "av_lustre_workload.py ConfigMap was not populated. Run "
+        "`make av-workload-script` or use the kubectl create configmap "
+        "command in the file header."
+    )

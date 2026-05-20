@@ -1,0 +1,195 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: av-dataset-validation
+  namespace: lustre-pressure-test
+  labels:
+    app.kubernetes.io/name: av-lustre-workload
+    app.kubernetes.io/component: validation
+    app.kubernetes.io/part-of: azure-managed-lustre-pressure-test
+spec:
+  parallelism: 10
+  completions: 10
+  completionMode: Indexed
+  backoffLimit: 2
+  ttlSecondsAfterFinished: 86400
+  activeDeadlineSeconds: 7200
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: av-lustre-workload
+        app.kubernetes.io/component: validation
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        kubernetes.azure.com/agentpool: juicefspool
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 50
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: av-lustre-workload
+                    app.kubernetes.io/component: validation
+                topologyKey: kubernetes.io/hostname
+      containers:
+        - name: av-workload
+          image: python:3.12-slim
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: MODE
+              value: read-write-output
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_COUNT
+              valueFrom:
+                configMapKeyRef:
+                  name: av-lustre-workload-config
+                  key: POD_COUNT
+            - name: DATASET_ROOT
+              valueFrom:
+                configMapKeyRef:
+                  name: av-lustre-workload-config
+                  key: DATASET_ROOT
+            - name: RESULT_ROOT
+              valueFrom:
+                configMapKeyRef:
+                  name: av-lustre-workload-config
+                  key: RESULT_ROOT
+            - name: RUN_ID
+              valueFrom:
+                configMapKeyRef:
+                  name: av-lustre-workload-config
+                  key: RUN_ID
+            - name: FILES_PER_POD
+              valueFrom:
+                configMapKeyRef:
+                  name: av-lustre-workload-config
+                  key: FILES_PER_POD
+            - name: MAX_BYTES_PER_POD
+              valueFrom:
+                configMapKeyRef:
+                  name: av-lustre-workload-config
+                  key: MAX_BYTES_PER_POD
+            - name: CHUNK_SIZE_BYTES
+              valueFrom:
+                configMapKeyRef:
+                  name: av-lustre-workload-config
+                  key: CHUNK_SIZE_BYTES
+            - name: VERIFY_READS
+              valueFrom:
+                configMapKeyRef:
+                  name: av-lustre-workload-config
+                  key: VERIFY_READS
+            - name: FAIL_ON_READ_ERROR
+              valueFrom:
+                configMapKeyRef:
+                  name: av-lustre-workload-config
+                  key: FAIL_ON_READ_ERROR
+            - name: FAIL_ON_WRITE_ERROR
+              valueFrom:
+                configMapKeyRef:
+                  name: av-lustre-workload-config
+                  key: FAIL_ON_WRITE_ERROR
+            - name: OUTPUT_BYTES_PER_INPUT
+              valueFrom:
+                configMapKeyRef:
+                  name: av-lustre-workload-config
+                  key: OUTPUT_BYTES_PER_INPUT
+            - name: MAX_OUTPUT_BYTES_PER_FILE
+              valueFrom:
+                configMapKeyRef:
+                  name: av-lustre-workload-config
+                  key: MAX_OUTPUT_BYTES_PER_FILE
+            - name: SMALL_MAX_BYTES
+              valueFrom:
+                configMapKeyRef:
+                  name: av-lustre-workload-config
+                  key: SMALL_MAX_BYTES
+            - name: MEDIUM_MAX_BYTES
+              valueFrom:
+                configMapKeyRef:
+                  name: av-lustre-workload-config
+                  key: MEDIUM_MAX_BYTES
+            - name: LARGE_MAX_BYTES
+              valueFrom:
+                configMapKeyRef:
+                  name: av-lustre-workload-config
+                  key: LARGE_MAX_BYTES
+            - name: STATS_INTERVAL_SECONDS
+              valueFrom:
+                configMapKeyRef:
+                  name: av-lustre-workload-config
+                  key: STATS_INTERVAL_SECONDS
+            - name: MAX_RECORDED_ERRORS
+              valueFrom:
+                configMapKeyRef:
+                  name: av-lustre-workload-config
+                  key: MAX_RECORDED_ERRORS
+            - name: EXCLUDE_PATHS
+              valueFrom:
+                configMapKeyRef:
+                  name: av-lustre-workload-config
+                  key: EXCLUDE_PATHS
+            - name: READ_PATTERN
+              valueFrom:
+                configMapKeyRef:
+                  name: av-lustre-workload-config
+                  key: READ_PATTERN
+            - name: RANDOM_OFFSET_READS
+              valueFrom:
+                configMapKeyRef:
+                  name: av-lustre-workload-config
+                  key: RANDOM_OFFSET_READS
+            - name: EPOCHS
+              valueFrom:
+                configMapKeyRef:
+                  name: av-lustre-workload-config
+                  key: EPOCHS
+            - name: WARMUP_SECONDS
+              valueFrom:
+                configMapKeyRef:
+                  name: av-lustre-workload-config
+                  key: WARMUP_SECONDS
+            - name: HOTSET_COUNT
+              valueFrom:
+                configMapKeyRef:
+                  name: av-lustre-workload-config
+                  key: HOTSET_COUNT
+            - name: BUCKET_SLO_P95_MS
+              valueFrom:
+                configMapKeyRef:
+                  name: av-lustre-workload-config
+                  key: BUCKET_SLO_P95_MS
+            - name: FAIL_ON_SLO
+              valueFrom:
+                configMapKeyRef:
+                  name: av-lustre-workload-config
+                  key: FAIL_ON_SLO
+          command:
+            - python
+            - /opt/av/av_lustre_workload.py
+          resources:
+            requests:
+              cpu: "1"
+              memory: "1Gi"
+            limits:
+              cpu: "2"
+              memory: "4Gi"
+          volumeMounts:
+            - name: lustre
+              mountPath: /mnt/lustre
+            - name: av-script
+              mountPath: /opt/av
+              readOnly: true
+      volumes:
+        - name: lustre
+          persistentVolumeClaim:
+            claimName: lustre-pressure-test-pvc
+        - name: av-script
+          configMap:
+            name: av-lustre-workload-script
+            defaultMode: 0o755

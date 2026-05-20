@@ -1,0 +1,69 @@
+# Static PV/PVC for the dedicated Azure Managed Lustre test filesystem
+# `lustrenewfile` in resource group `lustre-rg`.
+#
+# This uses the Azure-provided CSI values from:
+#   az resource show --resource-group lustre-rg \
+#     --name lustrenewfile \
+#     --resource-type Microsoft.StorageCache/amlFilesystems
+#
+# The reclaim policy is Retain so deleting Kubernetes objects does not delete
+# the existing Azure Managed Lustre filesystem.
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: sc-lustrenewfile-static
+  labels:
+    app.kubernetes.io/name: lustre-pressure-test
+    app.kubernetes.io/part-of: azure-managed-lustre-pressure-test
+provisioner: azurelustre.csi.azure.com
+parameters:
+  fs-name: lustrefs
+  mgs-ip-address: 10.10.16.6
+reclaimPolicy: Retain
+volumeBindingMode: Immediate
+mountOptions:
+  - noatime
+  - flock
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: pv-lustrenewfile-pressure-test
+  labels:
+    app.kubernetes.io/name: lustre-pressure-test
+    app.kubernetes.io/part-of: azure-managed-lustre-pressure-test
+    azure.workload/resource-group: lustre-rg
+    azure.workload/resource-name: lustrenewfile
+spec:
+  accessModes:
+    - ReadWriteMany
+  capacity:
+    storage: 8.0Ti
+  csi:
+    driver: azurelustre.csi.azure.com
+    volumeAttributes:
+      fs-name: lustrefs
+      mgs-ip-address: 10.10.16.6
+    volumeHandle: ff646dd4-b4ec-4b04-92fc-27921ad12aca
+  mountOptions:
+    - noatime
+    - flock
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: sc-lustrenewfile-static
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: lustre-pressure-test-pvc
+  namespace: lustre-pressure-test
+  labels:
+    app.kubernetes.io/name: lustre-pressure-test
+    app.kubernetes.io/part-of: azure-managed-lustre-pressure-test
+spec:
+  accessModes:
+    - ReadWriteMany
+  volumeName: pv-lustrenewfile-pressure-test
+  storageClassName: sc-lustrenewfile-static
+  resources:
+    requests:
+      storage: 8.0Ti
