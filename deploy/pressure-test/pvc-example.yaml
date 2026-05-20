@@ -1,9 +1,9 @@
 # Static PV/PVC for the dedicated Azure Managed Lustre test filesystem
-# `lustrenewfile` in resource group `lustre-rg`.
+# `almfstestcluster02` in resource group `LUSTRE-RG`.
 #
 # This uses the Azure-provided CSI values from:
-#   az resource show --resource-group lustre-rg \
-#     --name lustrenewfile \
+#   az resource show --resource-group LUSTRE-RG \
+#     --name almfstestcluster02 \
 #     --resource-type Microsoft.StorageCache/amlFilesystems
 #
 # The reclaim policy is Retain so deleting Kubernetes objects does not delete
@@ -11,14 +11,14 @@
 apiVersion: storage.k8s.io/v1
 kind: StorageClass
 metadata:
-  name: sc-lustrenewfile-static
+  name: sc-almfstestcluster02-static
   labels:
     app.kubernetes.io/name: lustre-pressure-test
     app.kubernetes.io/part-of: azure-managed-lustre-pressure-test
 provisioner: azurelustre.csi.azure.com
 parameters:
   fs-name: lustrefs
-  mgs-ip-address: 10.10.16.6
+  mgs-ip-address: 10.10.16.5
 reclaimPolicy: Retain
 volumeBindingMode: Immediate
 mountOptions:
@@ -28,12 +28,12 @@ mountOptions:
 apiVersion: v1
 kind: PersistentVolume
 metadata:
-  name: pv-lustrenewfile-pressure-test
+  name: pv-almfstestcluster02-pressure-test
   labels:
     app.kubernetes.io/name: lustre-pressure-test
     app.kubernetes.io/part-of: azure-managed-lustre-pressure-test
-    azure.workload/resource-group: lustre-rg
-    azure.workload/resource-name: lustrenewfile
+    azure.workload/resource-group: LUSTRE-RG
+    azure.workload/resource-name: almfstestcluster02
 spec:
   accessModes:
     - ReadWriteMany
@@ -43,13 +43,13 @@ spec:
     driver: azurelustre.csi.azure.com
     volumeAttributes:
       fs-name: lustrefs
-      mgs-ip-address: 10.10.16.6
-    volumeHandle: ff646dd4-b4ec-4b04-92fc-27921ad12aca
+      mgs-ip-address: 10.10.16.5
+    volumeHandle: 594308f7-40d4-429d-9120-978be2fab316
   mountOptions:
     - noatime
     - flock
   persistentVolumeReclaimPolicy: Retain
-  storageClassName: sc-lustrenewfile-static
+  storageClassName: sc-almfstestcluster02-static
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -62,8 +62,8 @@ metadata:
 spec:
   accessModes:
     - ReadWriteMany
-  volumeName: pv-lustrenewfile-pressure-test
-  storageClassName: sc-lustrenewfile-static
+  volumeName: pv-almfstestcluster02-pressure-test
+  storageClassName: sc-almfstestcluster02-static
   resources:
     requests:
       storage: 8.0Ti

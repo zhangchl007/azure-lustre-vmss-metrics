@@ -20,3 +20,4 @@ venv/
 # Editor/OS
 .vscode/
 .DS_Store
+reports/

@@ -20,45 +20,65 @@ spec:
         kubernetes.azure.com/agentpool: juicefspool
       containers:
         - name: download
-          image: google/cloud-sdk:slim
+          image: rclone/rclone:1.69
           env:
-            - name: GOOGLE_APPLICATION_CREDENTIALS
-              value: /secrets/gcp/adc.json
-            - name: CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE
-              value: /secrets/gcp/adc.json
+            - name: RCLONE_CONFIG_GCS_TYPE
+              value: google cloud storage
+            - name: RCLONE_CONFIG_GCS_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: gcp-credentials
+                  key: client-id
+            - name: RCLONE_CONFIG_GCS_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: gcp-credentials
+                  key: client-secret
+            - name: GCS_TOKEN_PATH
+              value: /secrets/gcp/token.json
             - name: DEST
               value: /mnt/lustre/waymo_v2
-            - name: BUCKET
-              value: gs://waymo_open_dataset_v_2_0_1
+            - name: SOURCE
+              value: gcs:waymo_open_dataset_v_2_0_1
+            - name: RCLONE_TRANSFERS
+              value: "32"
+            - name: RCLONE_CHECKERS
+              value: "16"
+            - name: RCLONE_BUFFER_SIZE
+              value: 32M
+            - name: RCLONE_STATS
+              value: 30s
+            - name: RCLONE_STATS_ONE_LINE
+              value: "true"
+            - name: RCLONE_LOG_LEVEL
+              value: INFO
           command:
-            - /bin/bash
-            - -exc
+            - /bin/sh
+            - -ec
             - |
-              echo "=== $(date -u) Starting Waymo download ==="
+              echo "=== $(date -u) Starting Waymo download with rclone ==="
               echo "Destination: ${DEST}"
-              echo "Source: ${BUCKET}"
+              echo "Source: ${SOURCE}"
 
-              # Activate authorized_user credentials via gcloud
-              gcloud auth login --cred-file="${GOOGLE_APPLICATION_CREDENTIALS}" --quiet 2>/dev/null \
-                || echo "Credential file loaded via env override"
-
-              # Verify auth
-              gcloud auth list
-              gcloud storage ls "${BUCKET}/" || { echo "ERROR: Cannot access bucket"; exit 1; }
+              test -s "${GCS_TOKEN_PATH}" \
+                || { echo "ERROR: ${GCS_TOKEN_PATH} missing or empty" >&2; exit 1; }
+              export RCLONE_CONFIG_GCS_TOKEN="$(cat "${GCS_TOKEN_PATH}")"
 
               mkdir -p "${DEST}"
 
-              # Check available disk space
+              echo "=== Source smoke test ==="
+              rclone lsd "${SOURCE}"
+
+              echo "=== Initial destination usage ==="
               df -h /mnt/lustre
+              du -sh "${DEST}" 2>/dev/null || true
 
-              # Download with gcloud storage (recommended over gsutil)
-              for split in training validation testing testing_location; do
-                echo "=== $(date -u) Downloading ${split} ==="
-                gcloud storage cp -r "${BUCKET}/${split}" "${DEST}/" 2>&1 | tail -50
-                echo "=== $(date -u) ${split} done ==="
-              done
+              echo "=== $(date -u) Starting GCS -> Lustre copy ==="
+              rclone copy "${SOURCE}" "${DEST}" \
+                --fast-list \
+                --metadata \
+                --progress
 
-              # Summary
               echo "=== Final disk usage ==="
               df -h /mnt/lustre
               echo "=== Dataset directory listing ==="
