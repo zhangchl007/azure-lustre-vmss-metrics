@@ -16,6 +16,8 @@
 #     --hotset-count 25 \
 #     --split training,validation \
 #     --subpath training/camera_image \
+#     --output-bytes-per-input 1.0 \
+#     --max-output-bytes-per-file 512MiB \
 #     --bucket-slo small=20,medium=300,large=3000 \
 #     --fail-on-slo \
 #     --output-dir reports/av-press-20260519-01
@@ -45,6 +47,11 @@ BUCKET_SLO=""
 FAIL_ON_SLO="false"
 SPLIT_FILTER=""
 SUBPATH=""
+OUTPUT_BYTES_PER_INPUT=""
+MAX_OUTPUT_BYTES_PER_FILE=""
+FILES_PER_POD=""
+MAX_BYTES_PER_POD=""
+VERIFY_READS=""
 OUTPUT_DIR="reports"
 
 usage() {
@@ -65,6 +72,12 @@ while [[ $# -gt 0 ]]; do
       --fail-on-slo) FAIL_ON_SLO="true"; shift ;;
       --split) SPLIT_FILTER="$2"; shift 2 ;;
       --subpath) SUBPATH="$2"; shift 2 ;;
+      --output-bytes-per-input) OUTPUT_BYTES_PER_INPUT="$2"; shift 2 ;;
+      --max-output-bytes-per-file) MAX_OUTPUT_BYTES_PER_FILE="$2"; shift 2 ;;
+      --files-per-pod) FILES_PER_POD="$2"; shift 2 ;;
+      --max-bytes-per-pod) MAX_BYTES_PER_POD="$2"; shift 2 ;;
+      --verify-reads) VERIFY_READS="true"; shift ;;
+      --no-verify-reads) VERIFY_READS="false"; shift ;;
       --output-dir) OUTPUT_DIR="$2"; shift 2 ;;
       --timeout) TIMEOUT="$2"; shift 2 ;;
       -h|--help) usage; exit 0 ;;
@@ -103,30 +116,64 @@ phase_log="$OUTPUT_DIR/${RUN_ID}-${PHASE}.log"
 phase_summary="$OUTPUT_DIR/${RUN_ID}-${PHASE}-summaries.jsonl"
 
 echo "[phase=$PHASE] cleaning any previous instance of job/$JOB_NAME"
-kubectl delete job -n "$NAMESPACE" "$JOB_NAME" --ignore-not-found
+kubectl delete job -n "$NAMESPACE" "$JOB_NAME" --ignore-not-found --wait=true
 
-echo "[phase=$PHASE] applying job manifest"
-kubectl apply -f "$JOB_MANIFEST" >/dev/null
+# Render a fresh Job locally before applying it. Job pod templates are
+# immutable after creation, so parallelism and env overrides must be present in
+# the manifest that creates the Job instead of patched afterward.
+rendered_job="$(mktemp)"
+trap 'rm -f "$rendered_job"' EXIT
+kubectl create --dry-run=client -f "$JOB_MANIFEST" -o json > "$rendered_job"
 
-echo "[phase=$PHASE] patching parallelism/completions to $PARALLELISM"
-kubectl patch job -n "$NAMESPACE" "$JOB_NAME" --type=merge -p \
-   "$(printf '{"spec":{"parallelism":%s,"completions":%s}}' "$PARALLELISM" "$PARALLELISM")"
+env_overrides=("POD_COUNT=$PARALLELISM" "RUN_ID=$RUN_ID")
+[[ -n "$MODE" ]]            && env_overrides+=("MODE=$MODE")
+[[ -n "$READ_PATTERN" ]]    && env_overrides+=("READ_PATTERN=$READ_PATTERN")
+[[ -n "$EPOCHS" ]]          && env_overrides+=("EPOCHS=$EPOCHS")
+[[ -n "$WARMUP_SECONDS" ]]  && env_overrides+=("WARMUP_SECONDS=$WARMUP_SECONDS")
+[[ -n "$HOTSET_COUNT" ]]    && env_overrides+=("HOTSET_COUNT=$HOTSET_COUNT")
+[[ -n "$BUCKET_SLO" ]]      && env_overrides+=("BUCKET_SLO_P95_MS=$BUCKET_SLO")
+[[ -n "$SPLIT_FILTER" ]]    && env_overrides+=("SPLIT_FILTER=$SPLIT_FILTER")
+[[ -n "$SUBPATH" ]]         && env_overrides+=("SUBPATH=$SUBPATH")
+[[ -n "$OUTPUT_BYTES_PER_INPUT" ]]   && env_overrides+=("OUTPUT_BYTES_PER_INPUT=$OUTPUT_BYTES_PER_INPUT")
+[[ -n "$MAX_OUTPUT_BYTES_PER_FILE" ]] && env_overrides+=("MAX_OUTPUT_BYTES_PER_FILE=$MAX_OUTPUT_BYTES_PER_FILE")
+[[ -n "$FILES_PER_POD" ]]            && env_overrides+=("FILES_PER_POD=$FILES_PER_POD")
+[[ -n "$MAX_BYTES_PER_POD" ]]        && env_overrides+=("MAX_BYTES_PER_POD=$MAX_BYTES_PER_POD")
+[[ -n "$VERIFY_READS" ]]             && env_overrides+=("VERIFY_READS=$VERIFY_READS")
+env_overrides+=("FAIL_ON_SLO=$FAIL_ON_SLO")
 
-# Patch ConfigMap-driven env vars on the Job template via kubectl set env.
-set_env=("kubectl" "set" "env" "-n" "$NAMESPACE" "job/$JOB_NAME"
-         "POD_COUNT=$PARALLELISM"
-         "RUN_ID=$RUN_ID")
-[[ -n "$MODE" ]]            && set_env+=("MODE=$MODE")
-[[ -n "$READ_PATTERN" ]]    && set_env+=("READ_PATTERN=$READ_PATTERN")
-[[ -n "$EPOCHS" ]]          && set_env+=("EPOCHS=$EPOCHS")
-[[ -n "$WARMUP_SECONDS" ]]  && set_env+=("WARMUP_SECONDS=$WARMUP_SECONDS")
-[[ -n "$HOTSET_COUNT" ]]    && set_env+=("HOTSET_COUNT=$HOTSET_COUNT")
-[[ -n "$BUCKET_SLO" ]]      && set_env+=("BUCKET_SLO_P95_MS=$BUCKET_SLO")
-[[ -n "$SPLIT_FILTER" ]]    && set_env+=("SPLIT_FILTER=$SPLIT_FILTER")
-[[ -n "$SUBPATH" ]]         && set_env+=("SUBPATH=$SUBPATH")
-set_env+=("FAIL_ON_SLO=$FAIL_ON_SLO")
-echo "[phase=$PHASE] setting env: ${set_env[*]:5}"
-"${set_env[@]}" >/dev/null
+echo "[phase=$PHASE] rendering parallelism/completions to $PARALLELISM"
+echo "[phase=$PHASE] rendering env: ${env_overrides[*]}"
+python3 - "$rendered_job" "$PARALLELISM" "${env_overrides[@]}" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+parallelism = int(sys.argv[2])
+overrides = dict(item.split("=", 1) for item in sys.argv[3:])
+
+job = json.loads(path.read_text(encoding="utf-8"))
+job["spec"]["parallelism"] = parallelism
+job["spec"]["completions"] = parallelism
+
+containers = job["spec"]["template"]["spec"]["containers"]
+container = next((c for c in containers if c.get("name") == "av-workload"), containers[0])
+env = container.setdefault("env", [])
+
+for name, value in overrides.items():
+   for item in env:
+      if item.get("name") == name:
+         item.pop("valueFrom", None)
+         item["value"] = value
+         break
+   else:
+      env.append({"name": name, "value": value})
+
+path.write_text(json.dumps(job), encoding="utf-8")
+PY
+
+echo "[phase=$PHASE] applying rendered job manifest"
+kubectl apply -f "$rendered_job" >/dev/null
 
 echo "[phase=$PHASE] waiting up to $TIMEOUT for completion"
 if ! kubectl wait -n "$NAMESPACE" --for=condition=complete \
@@ -135,7 +182,8 @@ if ! kubectl wait -n "$NAMESPACE" --for=condition=complete \
 fi
 
 echo "[phase=$PHASE] capturing pod logs to $phase_log"
-kubectl logs -n "$NAMESPACE" -l app.kubernetes.io/name=av-lustre-workload \
+kubectl logs -n "$NAMESPACE" \
+   -l app.kubernetes.io/name=av-lustre-workload,app.kubernetes.io/component=validation \
    --tail=-1 --prefix=true > "$phase_log"
 
 echo "[phase=$PHASE] extracting per-pod summary JSON objects to $phase_summary"
@@ -146,7 +194,14 @@ from pathlib import Path
 
 src = Path(sys.argv[1])
 dst = Path(sys.argv[2])
-text = src.read_text(encoding="utf-8", errors="replace")
+lines = []
+for line in src.read_text(encoding="utf-8", errors="replace").splitlines():
+   if line.startswith("["):
+      _, sep, rest = line.partition("] ")
+      if sep:
+         line = rest
+   lines.append(line)
+text = "\n".join(lines)
 dst.write_text("", encoding="utf-8")
 
 decoder = json.JSONDecoder()

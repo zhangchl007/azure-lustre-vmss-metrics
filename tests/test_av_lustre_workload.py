@@ -159,6 +159,71 @@ def test_write_per_pod_output_writes_summary_and_payload(tmp_path: Path):
     assert bin_files[0].stat().st_size <= 512 * 1024
 
 
+def test_planned_output_payload_bytes_applies_ratio_and_cap():
+    assert av.planned_output_payload_bytes(
+        input_bytes=1 * 1024 * 1024,
+        output_bytes_per_input=1.0,
+        max_output_bytes_per_file=2 * 1024 * 1024,
+    ) == 1 * 1024 * 1024
+    assert av.planned_output_payload_bytes(
+        input_bytes=5 * 1024 * 1024,
+        output_bytes_per_input=1.0,
+        max_output_bytes_per_file=512 * 1024,
+    ) == 512 * 1024
+    assert av.planned_output_payload_bytes(
+        input_bytes=5 * 1024 * 1024,
+        output_bytes_per_input=0.0,
+        max_output_bytes_per_file=512 * 1024,
+    ) == 0
+
+
+def test_write_per_pod_output_heavy_ratio_writes_planned_payload(tmp_path: Path):
+    pod_dir = tmp_path / "results" / "pod-0"
+    pod_dir.mkdir(parents=True)
+    result = av.FileReadResult(
+        path="/mnt/lustre/dataset/heavy.bin",
+        size=1 * 1024 * 1024,
+        bucket="medium",
+        elapsed_seconds=0.5,
+        chunk_count=1,
+        bytes_read=1 * 1024 * 1024,
+        checksum=None,
+    )
+    bytes_written = av.write_per_pod_output(
+        pod_output_dir=pod_dir,
+        file_result=result,
+        output_bytes_per_input=1.0,
+        max_output_bytes_per_file=2 * 1024 * 1024,
+    )
+    bin_files = list(pod_dir.rglob("*.bin"))
+    assert len(bin_files) == 1
+    assert bin_files[0].stat().st_size == 1 * 1024 * 1024
+    assert bytes_written > bin_files[0].stat().st_size  # includes JSON sidecar
+
+
+def test_write_per_pod_output_heavy_ratio_respects_cap(tmp_path: Path):
+    pod_dir = tmp_path / "results" / "pod-0"
+    pod_dir.mkdir(parents=True)
+    result = av.FileReadResult(
+        path="/mnt/lustre/dataset/capped.bin",
+        size=5 * 1024 * 1024,
+        bucket="medium",
+        elapsed_seconds=0.5,
+        chunk_count=5,
+        bytes_read=5 * 1024 * 1024,
+        checksum=None,
+    )
+    av.write_per_pod_output(
+        pod_output_dir=pod_dir,
+        file_result=result,
+        output_bytes_per_input=1.0,
+        max_output_bytes_per_file=512 * 1024,
+    )
+    bin_files = list(pod_dir.rglob("*.bin"))
+    assert len(bin_files) == 1
+    assert bin_files[0].stat().st_size == 512 * 1024
+
+
 def test_write_per_pod_output_refuses_escape(tmp_path: Path):
     pod_dir = tmp_path / "pod"
     pod_dir.mkdir()
@@ -256,6 +321,48 @@ def test_run_read_write_output_creates_isolated_outputs(dataset_tree: Path, tmp_
     # No source files were modified: re-enumerate and check sizes unchanged
     sizes_after = {p.name: p.stat().st_size for p in dataset_tree.rglob("*.bin")}
     assert sizes_after  # sanity
+
+
+def test_run_read_write_output_reports_write_metrics(dataset_tree: Path, tmp_path: Path, capsys):
+    result_root = tmp_path / "av-results"
+    parser = av.build_parser()
+    args = parser.parse_args(
+        [
+            "--mode",
+            "read-write-output",
+            "--dataset-root",
+            str(dataset_tree),
+            "--result-root",
+            str(result_root),
+            "--run-id",
+            "run-heavy-metrics",
+            "--pod-name",
+            "pod-0",
+            "--pod-index",
+            "0",
+            "--pod-count",
+            "1",
+            "--chunk-size",
+            "1MiB",
+            "--output-bytes-per-input",
+            "1.0",
+            "--max-output-bytes-per-file",
+            "64KiB",
+            "--no-verify-reads",
+        ]
+    )
+    av._resolve_pod_identity(args)
+    summary = av.run_read(args, write_outputs=True)
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    expected_payload_bytes = len(list(dataset_tree.rglob("*.bin"))) * 64 * 1024
+    assert summary.planned_output_bytes == expected_payload_bytes
+    assert summary.bytes_written >= summary.planned_output_bytes
+    assert summary.write_latency_ms["count"] == summary.files_succeeded
+    assert "per_bucket" in summary.write_latency_ms
+    assert payload["planned_output_bytes"] == expected_payload_bytes
+    assert payload["write_throughput_mib_s"] > 0
+    assert payload["write_latency_ms"]["count"] == summary.files_succeeded
 
 
 def test_run_read_write_output_blocks_overlapping_roots(dataset_tree: Path):
@@ -666,8 +773,8 @@ def test_write_per_pod_output_rejects_under_dataset_root(tmp_path: Path):
         av.write_per_pod_output(
             pod_output_dir=pod_output_dir,
             file_result=file_result,
-            output_bytes_per_input=0.0,
-            max_output_bytes_per_file=0,
+            output_bytes_per_input=1.0,
+            max_output_bytes_per_file=1024,
             dataset_root=dataset,
         )
 

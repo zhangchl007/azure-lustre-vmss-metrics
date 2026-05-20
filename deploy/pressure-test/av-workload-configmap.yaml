@@ -59,6 +59,10 @@ data:
   # ---- Output behaviour -----------------------------------------------------
   # Output is a small JSON sidecar per input file plus an optional synthetic
   # payload proportional to input size (capped per file).
+  # Heavy-write phases should override both knobs together, for example:
+  # OUTPUT_BYTES_PER_INPUT=1.0 and MAX_OUTPUT_BYTES_PER_FILE=512MiB. Raising
+  # only the ratio is not enough if the per-file cap remains at the 1MiB
+  # light-write default.
   OUTPUT_BYTES_PER_INPUT: "0.001"
   MAX_OUTPUT_BYTES_PER_FILE: "1MiB"
   FAIL_ON_WRITE_ERROR: "true"

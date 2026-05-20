@@ -83,4 +83,4 @@ spec:
         - name: av-script
           configMap:
             name: av-lustre-workload-script
-            defaultMode: 0o755
+            defaultMode: 493

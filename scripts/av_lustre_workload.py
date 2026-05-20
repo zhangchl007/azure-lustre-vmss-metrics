@@ -367,6 +367,29 @@ class FileReadResult:
     error: str | None = None
 
 
+def planned_output_payload_bytes(
+    *,
+    input_bytes: int,
+    output_bytes_per_input: float,
+    max_output_bytes_per_file: int,
+) -> int:
+    """Return the synthetic payload bytes planned for one input file.
+
+    JSON sidecars are intentionally excluded because their exact size depends
+    on runtime fields such as checksum and read timing. This function mirrors
+    the binary payload sizing used by :func:`write_per_pod_output`.
+    """
+    if input_bytes < 0:
+        raise ValueError("input_bytes must be non-negative")
+    if output_bytes_per_input < 0:
+        raise ValueError("output_bytes_per_input must be non-negative")
+    if max_output_bytes_per_file < 0:
+        raise ValueError("max_output_bytes_per_file must be non-negative")
+    if input_bytes == 0 or output_bytes_per_input == 0 or max_output_bytes_per_file == 0:
+        return 0
+    return min(int(input_bytes * output_bytes_per_input), max_output_bytes_per_file)
+
+
 @dataclass
 class WorkloadSummary:
     pod_name: str
@@ -384,8 +407,10 @@ class WorkloadSummary:
     files_failed: int = 0
     bytes_read: int = 0
     bytes_written: int = 0
+    planned_output_bytes: int = 0
     elapsed_seconds: float = 0.0
     per_file_latency_ms: dict[str, object] = field(default_factory=dict)
+    write_latency_ms: dict[str, object] = field(default_factory=dict)
     warmup_latency_ms: dict[str, float] = field(default_factory=dict)
     hotset_latency_ms: dict[str, object] = field(default_factory=dict)
     per_bucket_counts: dict[str, int] = field(default_factory=dict)
@@ -600,21 +625,23 @@ def write_per_pod_output(
         os.fsync(handle.fileno())
     bytes_written += len(summary_bytes)
 
-    if output_bytes_per_input > 0 and file_result.size > 0:
-        payload_bytes = int(file_result.size * output_bytes_per_input)
-        payload_bytes = min(payload_bytes, max_output_bytes_per_file)
-        if payload_bytes > 0:
-            payload_path = _check_output(artifact_dir / f"{artifact_name}.bin")
-            block = b"AV-LUSTRE-OUTPUT" * 64  # 1 KiB block
-            with payload_path.open("wb") as handle:
-                remaining = payload_bytes
-                while remaining > 0:
-                    write_chunk = block if remaining >= len(block) else block[:remaining]
-                    handle.write(write_chunk)
-                    remaining -= len(write_chunk)
-                handle.flush()
-                os.fsync(handle.fileno())
-            bytes_written += payload_bytes
+    payload_bytes = planned_output_payload_bytes(
+        input_bytes=file_result.size,
+        output_bytes_per_input=output_bytes_per_input,
+        max_output_bytes_per_file=max_output_bytes_per_file,
+    )
+    if payload_bytes > 0:
+        payload_path = _check_output(artifact_dir / f"{artifact_name}.bin")
+        block = b"AV-LUSTRE-OUTPUT" * 64  # 1 KiB block
+        with payload_path.open("wb") as handle:
+            remaining = payload_bytes
+            while remaining > 0:
+                write_chunk = block if remaining >= len(block) else block[:remaining]
+                handle.write(write_chunk)
+                remaining -= len(write_chunk)
+            handle.flush()
+            os.fsync(handle.fileno())
+        bytes_written += payload_bytes
     return bytes_written
 
 
@@ -645,6 +672,22 @@ def aggregate_summary(
         }
     if per_bucket_summary:
         summary.per_file_latency_ms["per_bucket"] = per_bucket_summary
+
+
+def aggregate_write_summary(
+    summary: WorkloadSummary,
+    write_latencies_ms: list[float],
+    per_bucket_write_ms: dict[str, list[float]],
+) -> None:
+    """Populate write latency percentiles on ``summary``."""
+    summary.write_latency_ms = _summarize_simple(write_latencies_ms)
+    per_bucket_summary = {
+        bucket: _summarize_simple(samples)
+        for bucket, samples in per_bucket_write_ms.items()
+        if samples
+    }
+    if per_bucket_summary:
+        summary.write_latency_ms["per_bucket"] = per_bucket_summary
 
 
 def _summarize_simple(samples: list[float]) -> dict[str, float]:
@@ -822,8 +865,10 @@ def run_read(args: argparse.Namespace, *, write_outputs: bool) -> WorkloadSummar
     steady_latencies_ms: list[float] = []
     warmup_latencies_ms: list[float] = []
     hotset_latencies_ms: list[float] = []
+    write_latencies_ms: list[float] = []
     per_bucket_steady_ms: dict[str, list[float]] = {b: [] for b in SIZE_BUCKETS}
     per_bucket_hotset_ms: dict[str, list[float]] = {b: [] for b in SIZE_BUCKETS}
+    per_bucket_write_ms: dict[str, list[float]] = {b: [] for b in SIZE_BUCKETS}
     started = time.monotonic()
     last_progress = started
     progress_interval = max(1, args.stats_interval_seconds)
@@ -831,6 +876,7 @@ def run_read(args: argparse.Namespace, *, write_outputs: bool) -> WorkloadSummar
     def _abort_with_summary(exit_code: int) -> None:
         summary.elapsed_seconds = time.monotonic() - started
         aggregate_summary(summary, steady_latencies_ms, per_bucket_steady_ms)
+        aggregate_write_summary(summary, write_latencies_ms, per_bucket_write_ms)
         summary.warmup_latency_ms = _summarize_simple(warmup_latencies_ms)
         summary.hotset_latency_ms = {
             "overall": _summarize_simple(hotset_latencies_ms),
@@ -878,6 +924,7 @@ def run_read(args: argparse.Namespace, *, write_outputs: bool) -> WorkloadSummar
         if not write_outputs or pod_output_dir is None or result.error is not None:
             return
         try:
+            write_started = time.monotonic()
             bytes_written = write_per_pod_output(
                 pod_output_dir=pod_output_dir,
                 file_result=result,
@@ -885,6 +932,9 @@ def run_read(args: argparse.Namespace, *, write_outputs: bool) -> WorkloadSummar
                 max_output_bytes_per_file=args.max_output_bytes_per_file,
                 dataset_root=dataset_resolved,
             )
+            write_elapsed_ms = (time.monotonic() - write_started) * 1000.0
+            write_latencies_ms.append(write_elapsed_ms)
+            per_bucket_write_ms.setdefault(result.bucket, []).append(write_elapsed_ms)
             summary.bytes_written += bytes_written
         except (OSError, ValueError) as exc:
             summary.files_failed += 1
@@ -908,6 +958,15 @@ def run_read(args: argparse.Namespace, *, write_outputs: bool) -> WorkloadSummar
             max_bytes_per_pod=args.max_bytes_per_pod,
             seed=epoch_seed,
         )
+        if write_outputs:
+            summary.planned_output_bytes += sum(
+                planned_output_payload_bytes(
+                    input_bytes=entry.size,
+                    output_bytes_per_input=args.output_bytes_per_input,
+                    max_output_bytes_per_file=args.max_output_bytes_per_file,
+                )
+                for entry in selected
+            )
         for entry in selected:
             result = read_file_pattern(
                 entry,
@@ -935,6 +994,7 @@ def run_read(args: argparse.Namespace, *, write_outputs: bool) -> WorkloadSummar
 
     summary.elapsed_seconds = time.monotonic() - started
     aggregate_summary(summary, steady_latencies_ms, per_bucket_steady_ms)
+    aggregate_write_summary(summary, write_latencies_ms, per_bucket_write_ms)
     summary.warmup_latency_ms = _summarize_simple(warmup_latencies_ms)
     summary.hotset_latency_ms = {
         "overall": _summarize_simple(hotset_latencies_ms),
@@ -1004,6 +1064,7 @@ def _print_progress(summary: WorkloadSummary, elapsed: float) -> None:
         "files_failed": summary.files_failed,
         "bytes_read": summary.bytes_read,
         "bytes_written": summary.bytes_written,
+        "planned_output_bytes": summary.planned_output_bytes,
         "elapsed_seconds": round(elapsed, 3),
     }
     print(json.dumps(payload, sort_keys=True), flush=True)
@@ -1027,14 +1088,20 @@ def _print_summary(summary: WorkloadSummary) -> None:
         "files_failed": summary.files_failed,
         "bytes_read": summary.bytes_read,
         "bytes_written": summary.bytes_written,
+        "planned_output_bytes": summary.planned_output_bytes,
         "elapsed_seconds": round(summary.elapsed_seconds, 3),
         "throughput_mib_s": round(
             summary.bytes_read / (1024**2 * max(summary.elapsed_seconds, 0.001)),
             3,
         ),
+        "write_throughput_mib_s": round(
+            summary.bytes_written / (1024**2 * max(summary.elapsed_seconds, 0.001)),
+            3,
+        ),
         "per_bucket_counts": summary.per_bucket_counts,
         "per_bucket_bytes": summary.per_bucket_bytes,
         "per_file_latency_ms": summary.per_file_latency_ms,
+        "write_latency_ms": summary.write_latency_ms,
         "warmup_latency_ms": summary.warmup_latency_ms,
         "hotset_latency_ms": summary.hotset_latency_ms,
         "slo": summary.slo,

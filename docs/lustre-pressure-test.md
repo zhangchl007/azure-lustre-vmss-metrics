@@ -33,6 +33,7 @@ The simulator is configured to match a typical AV simulation read profile:
 | Index/metadata lookups | Random seeks inside large files | `read-pattern: random-offset`, configurable `RANDOM_OFFSET_READS` |
 | Multi-epoch training-like access | Several passes over the dataset | `EPOCHS > 1`, reshuffled deterministically per epoch |
 | Output traces written back | Per-pod derived artifacts | `MODE: read-write-output`, outputs isolated under `RESULT_ROOT/<RUN_ID>/<pod-name>/` |
+| Heavy derived-output pipeline | Read real sensor/log shards, write large derived results | `read-write-output` with elevated `OUTPUT_BYTES_PER_INPUT` and `MAX_OUTPUT_BYTES_PER_FILE`; write latency and throughput are reported separately from read latency |
 
 File sizes are classified into buckets so that per-bucket latency is reported and SLO'd independently. Defaults:
 
@@ -55,7 +56,7 @@ Calculate the allowed output budget before every write-output phase:
 safe_write_budget_bytes = capacity_bytes * 0.80 - used_bytes - safety_reserve_bytes
 ```
 
-Block the phase if `OUTPUT_BYTES_PER_INPUT * total_dataset_bytes * epochs_planned` exceeds that budget. Use [scripts/lustre_safe_write_budget.py](scripts/lustre_safe_write_budget.py).
+Block the phase if the planned output payload exceeds that budget. Use [scripts/lustre_safe_write_budget.py](scripts/lustre_safe_write_budget.py). For capped synthetic writes, estimate payload as `sum(min(input_file_size * OUTPUT_BYTES_PER_INPUT, MAX_OUTPUT_BYTES_PER_FILE)) * epochs_planned`; a low `MAX_OUTPUT_BYTES_PER_FILE` can silently reduce actual writes even when the ratio is high.
 
 Stop a running phase if any of the following occurs:
 
@@ -101,7 +102,9 @@ The simulator additionally enforces three runtime guardrails so a misconfigured 
 | Validated `LUSTRE_VERSION` | `2.15.7` |
 | Validated `CLIENT_SHA_SUFFIX` | `33-g79ddf99` |
 | Validated node pool | `juicefspool` (Ubuntu 22.04, kernel `5.15.0-1110-azure`, SKU `Standard_D8d_v5`, 8 vCPU / 32 GiB each) |
-| Node count | 2 baseline · ≥ 4 during the pressure window (each node is `Standard_D8d_v5` with ~7 allocatable vCPU; 4 nodes ≈ 28 pod slots at 1 vCPU/pod, 6 nodes ≈ 42 slots for `ramp-40`). Scaled out via `az aks nodepool scale`, scaled back after Phase F. |
+| Node count | 2 baseline · ≥ 4 during the pressure window (each node is `Standard_D8d_v5` with ~7 allocatable vCPU; 4 nodes ≈ 28 pod slots at 1 vCPU/pod, 6 nodes ≈ 42 slots for `ramp-40`). If cluster autoscaler is enabled on the pool, change autoscaler `min-count` instead of using `az aks nodepool scale`; see § 8.0. |
+
+The May 20, 2026 run used a newer AMLFS instance, `almfstestcluster02` in `LUSTRE-RG`, with MGS `10.10.16.5`, filesystem name `lustrefs`, SKU `AMLFS-Durable-Premium-500`, capacity `8.0Ti`, and static CSI `volumeHandle` `594308f7-40d4-429d-9120-978be2fab316`. Update [deploy/pressure-test/pvc-example.yaml](deploy/pressure-test/pvc-example.yaml) before each run so the static PV/PVC points at the intended AMLFS instance.
 
 Pressure-test Jobs pin `nodeSelector: kubernetes.azure.com/agentpool: juicefspool`. Azure Linux 3 (`dexpool`) is out of scope until Microsoft publishes a working AMLFS Lustre client for kernel `6.6.130.1-3.azl3`; see the previous test summary captured in `/memories/session/plan.md`.
 
@@ -116,7 +119,7 @@ Pressure-test Jobs pin `nodeSelector: kubernetes.azure.com/agentpool: juicefspoo
 | [deploy/pressure-test/av-dataset-discovery-job.yaml](deploy/pressure-test/av-dataset-discovery-job.yaml) | Single-pod read-only dataset profiler. |
 | [deploy/pressure-test/av-dataset-validation-job.yaml](deploy/pressure-test/av-dataset-validation-job.yaml) | Indexed pressure-test Job (default parallelism 10). |
 | [deploy/pressure-test/av-output-cleanup-job.yaml](deploy/pressure-test/av-output-cleanup-job.yaml) | Scoped cleanup for `RESULT_ROOT/<RUN_ID>` only. |
-| [deploy/pressure-test/waymo-download-job.yaml](deploy/pressure-test/waymo-download-job.yaml) | One-shot Job that downloads Waymo Open Dataset v2.0.1 from `gs://waymo_open_dataset_v_2_0_1/` into `/mnt/lustre/waymo_v2/`. **Kept in the repo for reproducibility**, but the Job object and its `gcp-credentials` Secret are deleted from the cluster after the download completes (see § 13). Never re-run unless the dataset must be replaced. |
+| [deploy/pressure-test/waymo-download-job.yaml](deploy/pressure-test/waymo-download-job.yaml) | One-shot Job that downloads Waymo Open Dataset v2.0.1 from `gs://waymo_open_dataset_v_2_0_1/` into `/mnt/lustre/waymo_v2/`. **Kept in the repo for reproducibility**, but the Job object and its `gcp-credentials` Secret should be deleted from the cluster after the download completes (see § 13). Never re-run unless the dataset must be replaced. The validated May 20 path used `rclone/rclone:1.69` with OAuth material (`client-id`, `client-secret`, `token.json`); do not run shell `-x` while exporting secrets. |
 | [scripts/av_lustre_workload.py](scripts/av_lustre_workload.py) | AV simulator (modes: `discover`, `read-only`, `read-write-output`, `verify-output`). |
 | [scripts/av_pressure_phase.sh](scripts/av_pressure_phase.sh) | Phase driver: patch Job, wait, collect summaries. |
 | [scripts/lustre_safe_write_budget.py](scripts/lustre_safe_write_budget.py) | Local capacity budget calculator. |
@@ -142,8 +145,8 @@ All knobs are exposed via `ConfigMap/av-lustre-workload-config`. The validation 
 | `EPOCHS` | `1` | Number of shard passes per pod. |
 | `WARMUP_SECONDS` | `0` | Latency samples in the first N seconds go into a `warmup_latency_ms` bucket and are excluded from steady-state percentiles. |
 | `HOTSET_COUNT` | `0` | Each pod additionally reads the dataset-wide top-K largest files every epoch. |
-| `OUTPUT_BYTES_PER_INPUT` | `0.001` | Synthetic output payload size, as a fraction of input bytes. |
-| `MAX_OUTPUT_BYTES_PER_FILE` | `1MiB` | Cap synthetic output payload per input file. |
+| `OUTPUT_BYTES_PER_INPUT` | `0.001` | Synthetic output payload size, as a fraction of input bytes. Use `1.0` for the first heavy-write phase so output payload roughly matches input bytes. |
+| `MAX_OUTPUT_BYTES_PER_FILE` | `1MiB` | Cap synthetic output payload per input file. Heavy-write phases should raise this with the ratio, for example `512MiB`; otherwise large Waymo shards stay capped at the light-write default. |
 | `SMALL_MAX_BYTES`, `MEDIUM_MAX_BYTES`, `LARGE_MAX_BYTES` | `1MiB / 64MiB / 512MiB` | Size-bucket boundaries. |
 | `EXCLUDE_PATHS` | `/mnt/lustre/pressure-tests` | Colon-separated paths excluded from enumeration. Do **not** add `DATASET_ROOT` here — reads must traverse it. The metadata-heavy phase extends this list to skip `training/camera_image`, `training/lidar`, and the `*_segmentation` directories. |
 | `STATS_INTERVAL_SECONDS` | `30` | Per-pod JSON progress interval. |
@@ -172,8 +175,10 @@ Each pod emits one JSON summary on stdout at the end of its run. Key fields:
   "files_failed": 0,
   "bytes_read": 12345678901,
   "bytes_written": 12345678,
+ "planned_output_bytes": 12345600,
   "elapsed_seconds": 612.3,
   "throughput_mib_s": 192.7,
+ "write_throughput_mib_s": 12.3,
   "per_bucket_counts": {"small": 600, "medium": 400, "large": 200, "xlarge": 34},
   "per_bucket_bytes":  {"small": ...},
   "per_file_latency_ms": {
@@ -181,6 +186,13 @@ Each pod emits one JSON summary on stdout at the end of its run. Key fields:
     "per_bucket": {"small": {"count": 600, "p50": 1.1, "p95": 5.4, "p99": 9.8, "max": 14.2}, ...}
   },
   "warmup_latency_ms": {"count": 312, "p50": 12.8, "p95": 130.0, ...},
+ "write_latency_ms": {
+    "count": 1234,
+    "p50": 4.5,
+    "p95": 190.0,
+    "p99": 420.0,
+    "per_bucket": {"large": {"count": 200, "p95": 900.0, ...}}
+ },
   "hotset_latency_ms": {
     "overall": {"count": 50, "p50": 70.0, "p95": 240.0, ...},
     "per_bucket": {"large": {"count": 30, "p50": 80.0, ...}}
@@ -210,13 +222,14 @@ The test is structured as ordered **phases**. Each phase is a dedicated `RUN_ID`
 | 4 | `ramp-10-ro` | 10 | `read-only` | `full` | 1 | 0 | 30 | `--split training` | 10-pod baseline; per-bucket p95 + throughput floor. |
 | 5 | `ramp-10-rwo` | 10 | `read-write-output` | `full` | 1 | 0 | 30 | `--split training` | Same load with output amplification; capacity-delta check. |
 | 6 | `ramp-20` | 20 | `read-write-output` | `full` | 1 | 0 | 60 | `--split training,validation` | First real concurrency stress. |
-| 7 | `ramp-40` | 40 | `read-write-output` | `full` | 1 | 0 | 60 | `--split training,validation` | Peak throughput target (requires juicefspool scaled to 4 nodes). |
-| 8 | `metadata-heavy` | 20 | `read-only` | `full` | 1 | 0 | 60 | `--subpath training`, `EXCLUDE_PATHS` extended to skip `training/camera_image`, `training/lidar`, `training/*_segmentation` | Force the walk onto tiny-file directories (`camera_box`, `camera_calibration`, `camera_hkp`, `camera_to_lidar_box_association`, `stats`, etc.) to stress MDT operations. Tight SLO: `small` p95 ≤ 30 ms. |
-| 9 | `hotset` | 20 | `read-only` | `full` | 3 | 50 | 60 | `--subpath training/camera_image` | All pods deterministically re-read the top-50 largest camera_image shards across 3 epochs. Look for warm-cache p95 improvement on epochs 2/3. |
-| 10 | `soak` | 20 | `read-write-output` | `full` | 4 | 25 | 120 | `--split training,validation` | Multi-epoch sustained run; tail-latency and leak surface. Gate: epoch-4 p95 ≤ 1.2 × epoch-1 p95. |
-| 11 | `cool-down` | – | – | – | – | – | – | – | Watch capacity/latency return toward baseline. |
-| 12 | `verify+cleanup` | 1 | `verify-output` then cleanup Job | – | – | – | – | – | Validate outputs, then delete `RESULT_ROOT/<RUN_ID>` per phase. |
-| 13 | `report` | – | – | – | – | – | – | – | Produce the structured report (§ 12). |
+| 7 | `ramp-40` | 40 | `read-write-output` | `full` | 1 | 0 | 60 | `--split training,validation` | Peak throughput target (requires juicefspool scaled to 6 nodes). |
+| 8 | `heavy-write` | 20 | `read-write-output` | `full` | 1 | 0 | 60 | `--split training,validation`, `OUTPUT_BYTES_PER_INPUT=1.0`, `MAX_OUTPUT_BYTES_PER_FILE=512MiB` | Realistic AV derived-output pressure. Target ≈594 GiB payload plus JSON sidecars; collect write latency/throughput without SLO gating first. |
+| 9 | `metadata-heavy` | 20 | `read-only` | `full` | 1 | 0 | 60 | `--subpath training`, `EXCLUDE_PATHS` extended to skip `training/camera_image`, `training/lidar`, `training/*_segmentation` | Force the walk onto tiny-file directories (`camera_box`, `camera_calibration`, `camera_hkp`, `camera_to_lidar_box_association`, `stats`, etc.) to stress MDT operations. Tight SLO: `small` p95 ≤ 30 ms. |
+| 10 | `hotset` | 20 | `read-only` | `full` | 3 | 50 | 60 | `--subpath training/camera_image` | All pods deterministically re-read the top-50 largest camera_image shards across 3 epochs. Look for warm-cache p95 improvement on epochs 2/3. |
+| 11 | `soak` | 20 | `read-write-output` | `full` | 4 | 25 | 120 | `--split training,validation` | Multi-epoch sustained run; tail-latency and leak surface. Gate: epoch-4 p95 ≤ 1.2 × epoch-1 p95. |
+| 12 | `cool-down` | – | – | – | – | – | – | – | Watch capacity/latency return toward baseline. |
+| 13 | `verify+cleanup` | 1 | `verify-output` then cleanup Job | – | – | – | – | – | Validate outputs, then delete `RESULT_ROOT/<RUN_ID>` per phase. |
+| 14 | `report` | – | – | – | – | – | – | – | Produce the structured report (§ 12). |
 
 You can selectively run a subset; phases 0–5 are the minimum recommended after any dataset refresh.
 
@@ -234,7 +247,40 @@ The ramp phases need pod slots beyond the 2-node baseline of `juicefspool`. Each
 | ramp-20 | 20 | 3–4 |
 | ramp-40 | 40 | 6 |
 
-Scale out before each ramp window and scale back after Phase 13.
+Scale out before each ramp window and scale back after Phase 14. First check whether cluster autoscaler is enabled on the node pool:
+
+```bash
+az aks nodepool show \
+   --resource-group aks-test-rg \
+   --cluster-name aks-storage-test \
+   --name juicefspool \
+   --query '{count:count,minCount:minCount,maxCount:maxCount,enableAutoScaling:enableAutoScaling}' \
+   -o table
+```
+
+If `enableAutoScaling` is `true`, do **not** use `az aks nodepool scale`; AKS rejects manual scale on autoscaler-enabled pools. Raise autoscaler `min-count` instead:
+
+```bash
+# Before ramp-20
+az aks nodepool update \
+   --resource-group aks-test-rg \
+   --cluster-name aks-storage-test \
+   --name juicefspool \
+   --update-cluster-autoscaler \
+   --min-count 4 \
+   --max-count 20
+
+# Before ramp-40 and the remaining high-pressure phases
+az aks nodepool update \
+   --resource-group aks-test-rg \
+   --cluster-name aks-storage-test \
+   --name juicefspool \
+   --update-cluster-autoscaler \
+   --min-count 6 \
+   --max-count 20
+```
+
+If autoscaler is disabled, scale the pool directly:
 
 ```bash
 # Scale out before ramp-40 (use 4 nodes for ramp-20, 6 for ramp-40)
@@ -250,7 +296,19 @@ kubectl rollout status -n kube-system daemonset/csi-azurelustre-node --timeout=3
 kubectl get pods -n kube-system -l app=csi-azurelustre-node -o wide   # expect N Running, 3/3 each
 ```
 
-After Phase 13 (report), scale back:
+After Phase 14 (report), scale back. For autoscaler-enabled pools, restore the baseline minimum and allow AKS to scale down asynchronously:
+
+```bash
+az aks nodepool update \
+   --resource-group aks-test-rg \
+   --cluster-name aks-storage-test \
+   --name juicefspool \
+   --update-cluster-autoscaler \
+   --min-count 2 \
+   --max-count 20
+```
+
+For autoscaler-disabled pools:
 
 ```bash
 az aks nodepool scale \
@@ -275,6 +333,53 @@ Confirm the Azure Lustre CSI driver is Running on `juicefspool`:
 ```bash
 kubectl get pods -n kube-system -l app=csi-azurelustre-node -o wide
 ```
+
+### 8.1.1 Recommended: automated full run
+
+Use [scripts/av_pressure_all_phases.sh](../scripts/av_pressure_all_phases.sh) when you want the standard pressure-test ladder without manually launching each phase. It wraps the manual sequence below and performs the safety steps that are easy to miss during a long run:
+
+- applies the pressure-test resources and republishes the simulator script ConfigMap;
+- runs discovery and saves `${OUTDIR}/discovery.json`;
+- captures a fixed 50-file immutability baseline, then re-checks those exact paths after every phase;
+- scales `juicefspool` to the required minimums for `ramp-20`, `ramp-40`, and later high-pressure phases, then scales back on exit unless disabled;
+- runs smoke, ramp, heavy-write, metadata-heavy, hotset, strict soak, and soak-collect phases;
+- restores `EXCLUDE_PATHS` after metadata-heavy even if a later step fails;
+- writes `${OUTDIR}/phase-summary-index.tsv` and `${OUTDIR}/aggregate-summary.json` for reporting.
+
+Default run for `almfstestcluster02` / `aks-storage-test`:
+
+```bash
+scripts/av_pressure_all_phases.sh --yes
+```
+
+If you already know current filesystem usage, pass it explicitly for the heavy-write capacity guard:
+
+```bash
+scripts/av_pressure_all_phases.sh --yes --current-used 1.25TiB
+```
+
+If you want to manage AKS scaling yourself, or only validate read-heavy phases:
+
+```bash
+scripts/av_pressure_all_phases.sh --yes --skip-scale
+scripts/av_pressure_all_phases.sh --yes --skip-heavy-write
+```
+
+Useful options:
+
+| Option | Purpose |
+| --- | --- |
+| `--run-base <id>` | Use a stable run prefix instead of `av-press-<UTC timestamp>`. |
+| `--output-dir <dir>` | Save logs, summaries, discovery, immutability checks, and aggregates outside `reports/<run-base>`. |
+| `--skip-setup` | Do not apply manifests or republish the workload ConfigMap. |
+| `--skip-discovery` | Reuse existing dataset discovery knowledge. |
+| `--skip-scale` | Do not call `az aks nodepool`; useful if autoscaler policy is managed separately. |
+| `--no-restore-scale` | Leave the nodepool at the high-pressure min/count after the script exits. |
+| `--skip-heavy-write` | Skip the ≈600 GiB derived-output phase. |
+| `--skip-strict-soak` | Skip the strict `--fail-on-slo` soak and run only the collection soak. |
+| `--stop-on-slo` | Stop the full run on read-latency SLO failures instead of recording them and continuing. |
+
+The script treats data errors and immutability changes as hard failures. Read-latency SLO failures are recorded in `phase-summary-index.tsv` and the run continues by default, matching the May 20 findings where data safety passed while intentionally aggressive latency SLOs failed under concurrency. Use `--stop-on-slo` if you want SLO breaches to abort the sweep.
 
 ### 8.2 Phase 0 — baseline (30–60 min, no load)
 
@@ -309,16 +414,22 @@ Before launching any Phase E run, baseline a fixed 50-file sample of `DATASET_RO
 RUN_BASE=av-press-$(date +%Y%m%d-%H%M)
 mkdir -p reports/${RUN_BASE}
 BASELINE=reports/${RUN_BASE}/dataset-immutability-baseline.tsv
+POD=av-immutability-baseline-${RUN_BASE}
 
-kubectl run av-immutability-baseline --rm -i --restart=Never \
+kubectl run ${POD} --restart=Never \
    --image=alpine:3.20 -n lustre-pressure-test \
-   --overrides='{"apiVersion":"v1","spec":{"nodeSelector":{"kubernetes.azure.com/agentpool":"juicefspool"},"containers":[{"name":"baseline","image":"alpine:3.20","command":["sh","-c","apk add --no-cache coreutils findutils >/dev/null 2>&1; set -e; find /mnt/lustre/waymo_v2 -type f | shuf -n 50 | while read f; do printf \"%s\\t%s\\t%s\\t\" \"$f\" \"$(stat -c %s \"$f\")\" \"$(stat -c %Y \"$f\")\"; head -c $((1024*1024)) \"$f\" | sha256sum | awk \"{print \\$1}\"; done"],"volumeMounts":[{"name":"lustre","mountPath":"/mnt/lustre"}]}],"volumes":[{"name":"lustre","persistentVolumeClaim":{"claimName":"lustre-pressure-test-pvc"}}]}}' \
-   > ${BASELINE}
+   --overrides='{"apiVersion":"v1","spec":{"nodeSelector":{"kubernetes.azure.com/agentpool":"juicefspool"},"restartPolicy":"Never","containers":[{"name":"baseline","image":"alpine:3.20","command":["sh","-c","apk add --no-cache coreutils findutils >/dev/null 2>&1; set -e; find /mnt/lustre/waymo_v2 -type f | shuf -n 50 | while read f; do printf \"%s\\t%s\\t%s\\t\" \"$f\" \"$(stat -c %s \"$f\")\" \"$(stat -c %Y \"$f\")\"; head -c $((1024*1024)) \"$f\" | sha256sum | awk \"{print \\$1}\"; done"],"volumeMounts":[{"name":"lustre","mountPath":"/mnt/lustre"}]}],"volumes":[{"name":"lustre","persistentVolumeClaim":{"claimName":"lustre-pressure-test-pvc"}}]}}'
+
+kubectl wait -n lustre-pressure-test --for=jsonpath='{.status.phase}'=Succeeded pod/${POD} --timeout=900s
+kubectl logs -n lustre-pressure-test ${POD} > ${BASELINE}
+kubectl delete pod -n lustre-pressure-test ${POD} --ignore-not-found
 
 wc -l ${BASELINE}   # must be 50
 ```
 
-Re-check after each Phase E phase by re-running the same pod (rename it) and `diff`-ing the output against `${BASELINE}`; any non-zero diff is a hard abort (see § 11).
+Re-check after each pressure phase by re-hashing the **same paths** recorded in `${BASELINE}` and `diff`-ing the output against `${BASELINE}`; any non-zero diff is a hard abort (see § 11). Do not call `shuf` again for the re-check, because that can select a different sample and make the comparison meaningless. The automated full-run script handles this by saving the baseline paths into a temporary ConfigMap for each re-check pod.
+
+> Avoid parsing values from `kubectl run --rm` output in automation. The cleanup line (`pod "..." deleted`) can be mixed into stdout and corrupt numeric parsing. For capacity or immutability automation, prefer creating a named pod, waiting for `Succeeded`, reading `kubectl logs`, then deleting the pod.
 
 ### 8.5 Phase 3 — smoke + dry runs
 
@@ -340,15 +451,22 @@ Required outcomes:
 - Every output line in pod logs resolves under `${RESULT_ROOT}/${RUN_ID}/<pod-name>/`.
 - The immutability sample (§ 8.4) is unchanged after the phase.
 
-### 8.6 Phases 4–10 — pressure ramps
+### 8.6 Phases 4–11 — pressure ramps
 
-Run each phase via the helper. **After every phase**, re-run the immutability check from § 8.4 and `diff` against the baseline before launching the next phase. Example for the full sequence:
+The automated path in § 8.1.1 is preferred for full runs. If you need to debug or rerun one phase manually, use the helper directly. **After every phase**, re-run the exact-path immutability check from § 8.4 and `diff` against the baseline before launching the next phase. Example for the full manual sequence:
 
 ```bash
 RUN_BASE=av-press-$(date +%Y%m%d-%H%M)
 OUTDIR=reports/${RUN_BASE}
 SLO="small=20,medium=300,large=3000,xlarge=8000"
 META_EXCLUDE="/mnt/lustre/pressure-tests:/mnt/lustre/waymo_v2/training/camera_image:/mnt/lustre/waymo_v2/training/lidar:/mnt/lustre/waymo_v2/training/lidar_segmentation:/mnt/lustre/waymo_v2/training/camera_segmentation"
+
+restore_excludes() {
+   kubectl patch configmap -n lustre-pressure-test av-lustre-workload-config \
+      --type merge \
+      -p '{"data":{"EXCLUDE_PATHS":"/mnt/lustre/pressure-tests"}}' >/dev/null
+}
+trap restore_excludes EXIT
 
 scripts/av_pressure_phase.sh --phase ramp-10-ro --parallelism 10 \
    --run-id ${RUN_BASE}-ramp-10-ro --mode read-only \
@@ -365,20 +483,47 @@ scripts/av_pressure_phase.sh --phase ramp-20 --parallelism 20 \
    --read-pattern full --split training,validation \
    --warmup-seconds 60 --bucket-slo "${SLO}" --output-dir ${OUTDIR}
 
-# Requires juicefspool scaled to 4 nodes (§ 8.0)
+# Requires juicefspool scaled to 6 nodes or autoscaler min-count 6 (§ 8.0)
 scripts/av_pressure_phase.sh --phase ramp-40 --parallelism 40 \
    --run-id ${RUN_BASE}-ramp-40 --mode read-write-output \
    --read-pattern full --split training,validation \
    --warmup-seconds 60 --bucket-slo "${SLO}" --output-dir ${OUTDIR}
 
+# Heavy-write: realistic derived-output pressure.
+# May 20 discovery/ramp data: training+validation read set ≈593.78 GiB.
+# With OUTPUT_BYTES_PER_INPUT=1.0 and MAX_OUTPUT_BYTES_PER_FILE=512MiB,
+# target payload is ≈594 GiB plus JSON sidecars. Validate capacity first.
+# Set CURRENT_USED to the current filesystem usage from df/Prometheus/Azure metrics,
+# for example: CURRENT_USED=1.25TiB
+python3 scripts/lustre_safe_write_budget.py \
+   --capacity 8.0TiB \
+   --used "${CURRENT_USED}" \
+   --planned-write 600GiB \
+   --reserve 200GiB \
+   --max-used-percent 80
+scripts/av_pressure_phase.sh --phase heavy-write --parallelism 20 \
+   --run-id ${RUN_BASE}-heavy-write --mode read-write-output \
+   --read-pattern full --split training,validation \
+   --warmup-seconds 60 \
+   --output-bytes-per-input 1.0 \
+   --max-output-bytes-per-file 512MiB \
+   --bucket-slo "small=50,medium=500,large=5000,xlarge=10000" \
+   --output-dir ${OUTDIR}
+
 # Metadata-heavy: walk training/, exclude the large directories
-kubectl set env -n lustre-pressure-test configmap/av-lustre-workload-config EXCLUDE_PATHS="${META_EXCLUDE}"
+PATCH=$(python3 - "${META_EXCLUDE}" <<'PY'
+import json, sys
+print(json.dumps({'data': {'EXCLUDE_PATHS': sys.argv[1]}}))
+PY
+)
+kubectl patch configmap -n lustre-pressure-test av-lustre-workload-config \
+   --type merge -p "${PATCH}" >/dev/null
 scripts/av_pressure_phase.sh --phase metadata-heavy --parallelism 20 \
    --run-id ${RUN_BASE}-metadata-heavy --mode read-only \
    --read-pattern full --subpath training \
    --warmup-seconds 60 \
    --bucket-slo "small=30,medium=300,large=3000,xlarge=8000" --output-dir ${OUTDIR}
-kubectl set env -n lustre-pressure-test configmap/av-lustre-workload-config EXCLUDE_PATHS="/mnt/lustre/pressure-tests"
+restore_excludes
 
 scripts/av_pressure_phase.sh --phase hotset --parallelism 20 \
    --run-id ${RUN_BASE}-hotset --mode read-only \
@@ -391,17 +536,56 @@ scripts/av_pressure_phase.sh --phase soak --parallelism 20 \
    --read-pattern full --epochs 4 --hotset-count 25 \
    --split training,validation --warmup-seconds 120 \
    --bucket-slo "${SLO}" --fail-on-slo --output-dir ${OUTDIR}
+
+# If the strict gate fails with pod exit code 4, collect a complete metrics run
+# without SLO exit gating so all 20 summaries are emitted for analysis.
+scripts/av_pressure_phase.sh --phase soak --parallelism 20 \
+   --run-id ${RUN_BASE}-soak-collect --mode read-write-output \
+   --read-pattern full --epochs 4 --hotset-count 25 \
+   --split training,validation --warmup-seconds 120 \
+   --bucket-slo "${SLO}" --output-dir ${OUTDIR}
 ```
+
+The May 20 run showed why this two-step soak pattern is useful: the strict `--fail-on-slo` soak exited with code `4` after only 3 pod summaries, because the Job failed on SLO before all indexed completions finished. The follow-up `soak-collect` run completed all 20 pods and produced the full throughput/latency dataset.
+
+After `heavy-write`, aggregate the write payload before continuing:
+
+```bash
+jq -s '[.[].bytes_written] | add' "${OUTDIR}/${RUN_BASE}-heavy-write-heavy-write-summaries.jsonl"
+jq -s '[.[].planned_output_bytes] | add' "${OUTDIR}/${RUN_BASE}-heavy-write-heavy-write-summaries.jsonl"
+jq -s '[.[].write_throughput_mib_s] | add' "${OUTDIR}/${RUN_BASE}-heavy-write-heavy-write-summaries.jsonl"
+jq -s '[.[] | select(.files_failed != 0 or (.errors | length != 0))]' "${OUTDIR}/${RUN_BASE}-heavy-write-heavy-write-summaries.jsonl"
+```
+
+The first heavy-write run is a **collection run**, not a strict gate. Keep `--fail-on-slo` off until a write-latency baseline exists, then define write-specific SLOs from `write_latency_ms` and `write_throughput_mib_s`.
 
 Each invocation:
 
 1. Cleans any prior `job/av-dataset-validation`.
-2. Re-applies the manifest, patches `parallelism`/`completions` and env vars (including `SPLIT_FILTER` / `SUBPATH` when `--split` / `--subpath` are passed).
+2. Renders a fresh Job manifest with `parallelism`/`completions` and env vars (including `SPLIT_FILTER` / `SUBPATH` when `--split` / `--subpath` are passed) before creation. This avoids Kubernetes immutable Job-template patch errors.
 3. Waits for completion.
 4. Saves pod logs to `${OUTDIR}/<run-id>-<phase>.log`.
 5. Extracts per-pod `event=summary` objects to `${OUTDIR}/<run-id>-<phase>-summaries.jsonl`.
 
-### 8.7 Phase 12 — verify and cleanup
+### 8.6.1 Reference result: `almfstestcluster02` on May 20, 2026
+
+Use these numbers as sanity checks for the same AMLFS SKU, AKS node pool, and Waymo dataset. They are not universal pass/fail targets.
+
+| Phase | Pods | Files failed | Read GiB | Written GiB | Wall read MiB/s | SLO result |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| smoke | 1 | 0 | 474.02 | 0.00 | 490.955 | pass |
+| ramp-10-ro | 10 | 0 | 474.02 | 0.00 | 3,189.364 | fail: small p95 |
+| ramp-10-rwo | 10 | 0 | 474.02 | 0.48 | 2,609.399 | fail: small p95 |
+| ramp-20 | 20 | 0 | 593.78 | 0.60 | 3,250.136 | fail: small/medium p95 |
+| ramp-40 | 40 | 0 | 593.78 | 0.60 | 4,329.549 | fail: small/medium/large p95 |
+| heavy-write | 20 | TBD | ≈593.78 target | ≈594 target | TBD | collection run; first baseline pending |
+| metadata-heavy | 20 | 0 | 76.01 | 0.00 | 3,704.738 | no steady-state samples; completed inside warmup |
+| hotset | 20 | 0 | 2,124.32 | 0.00 | 3,375.000 | fail: large p95 |
+| soak-collect | 20 | 0 | 3,307.58 | 2.39 | 3,345.712 | fail: small/medium p95 |
+
+Interpretation: data correctness and dataset immutability passed across the collected phases (`0` file failures), while the intentionally aggressive latency SLOs failed under concurrency. Treat this as a successful filesystem/data-safety run with SLO tuning or performance investigation follow-up, not as a data-corruption failure.
+
+### 8.7 Phase 13 — verify and cleanup
 
 Verify the outputs (optional, but recommended after a long endurance run):
 
@@ -530,7 +714,16 @@ A phase passes when **all** of the following hold:
 
 9. **Dataset immutability:** the 50-file sample baselined in § 8.4 hashes identically after the phase (same `size`, `mtime`, and `sha256-of-first-MiB`). Every output path observed in pod logs resolves under `RESULT_ROOT/<RUN_ID>/<pod-name>/` and **never** under `DATASET_ROOT`.
 
+10. **Heavy-write completion:** for `heavy-write`, aggregated `bytes_written` is at least the aggregated `planned_output_bytes` (payload plus JSON sidecars means actual should be slightly higher), `write_latency_ms.count` matches successful source files, and no pod exits with code `3`.
+
 Any single criterion missing => the phase **fails**.
+
+For reporting, separate **data correctness** from **latency SLO**:
+
+- `files_failed == 0` plus a passing immutability diff means the dataset and generated outputs were handled safely.
+- `slo.pass == false` means the workload exceeded the configured latency objective. It does not imply read/write corruption.
+- In write-heavy phases, `planned_output_bytes` tracks planned binary payload only; `bytes_written` includes JSON sidecars and should be slightly larger.
+- With `FAIL_ON_SLO=true`, pods exit `4`. On an Indexed Job with `backoffLimit > 0`, this can produce partial summaries and retries. Use a non-gating `*-collect` run when complete metrics are required.
 
 ## 11. Abort and rollback
 
@@ -548,7 +741,7 @@ If any stop condition fires:
    kubectl delete job -n lustre-pressure-test av-dataset-validation
    ```
 2. **Check capacity recovery** with `azure_managed_lustre_ost_bytes_used_percent`. If usage is climbing, do not run a new phase — run cleanup first.
-3. **Run scoped cleanup** for the current `RUN_ID` using phase 12.
+3. **Run scoped cleanup** for the current `RUN_ID` using phase 13.
 4. **Collect forensics**:
    ```bash
    kubectl get events -n lustre-pressure-test --sort-by=.lastTimestamp | tail -100
@@ -581,15 +774,16 @@ Create the report at `reports/av-press-<run-base>.md` after each full run. Requi
 - Top-10 largest files (size + redacted path)
 
 ## Phase results
-| Phase | Pods | Mode | Pattern | Epochs | Hotset | Warmup | Files OK / Failed | Read MiB/s (sum) | Write MiB/s (sum) | p95 small/med/large (ms) | p99 small/med/large (ms) | SLO | Result |
-| --- | --: | --- | --- | --: | --: | --: | --- | --: | --: | --- | --- | --- | --- |
-| steady-10 | 10 | rwo | full | 1 | 0 | 60 | 12340 / 0 | 1180 | 12 | 4.2 / 88 / 1280 | 9.8 / 230 / 3100 | pass | PASS |
-| ramp-20   | 20 | rwo | full | 1 | 0 | 60 | ... | ... | ... | ... | ... | ... | ... |
-| ramp-40   | 40 | rwo | full | 1 | 0 | 60 | ... | ... | ... | ... | ... | ... | ... |
-| metadata-storm | 20 | ro | head-tail | 1 | 0 | 60 | ... | ... | – | ... | ... | – | ... |
-| index-lookup   | 20 | ro | random-offset | 1 | 0 | 60 | ... | ... | – | ... | ... | – | ... |
-| hotset    | 20 | ro | full | 2 | 25 | 60 | ... | ... | – | ... | ... | – | ... |
-| endurance | 10 | rwo | full | 4 | 25 | 120 | ... | ... | ... | ... | ... | ... | ... |
+| Phase | Pods | Mode | Pattern | Epochs | Hotset | Warmup | Files OK / Failed | Read MiB/s (sum) | Write MiB/s (sum) | Planned / actual write GiB | p95 read small/med/large (ms) | p95 write small/med/large (ms) | SLO | Result |
+| --- | --: | --- | --- | --: | --: | --: | --- | --: | --: | --- | --- | --- | --- | --- |
+| steady-10 | 10 | rwo | full | 1 | 0 | 60 | 12340 / 0 | 1180 | 12 | 0.7 / 0.7 | 4.2 / 88 / 1280 | 1.2 / 40 / 700 | pass | PASS |
+| ramp-20   | 20 | rwo | full | 1 | 0 | 60 | ... | ... | ... | ... | ... | ... | ... | ... |
+| ramp-40   | 40 | rwo | full | 1 | 0 | 60 | ... | ... | ... | ... | ... | ... | ... | ... |
+| heavy-write | 20 | rwo | full | 1 | 0 | 60 | ... | ... | ... | 594 / 594+ | ... | ... | collect | ... |
+| metadata-storm | 20 | ro | head-tail | 1 | 0 | 60 | ... | ... | – | – | ... | – | – | ... |
+| index-lookup   | 20 | ro | random-offset | 1 | 0 | 60 | ... | ... | – | – | ... | – | – | ... |
+| hotset    | 20 | ro | full | 2 | 25 | 60 | ... | ... | – | – | ... | – | – | ... |
+| endurance | 10 | rwo | full | 4 | 25 | 120 | ... | ... | ... | ... | ... | ... | ... | ... |
 
 ## Capacity and exporter health
 - Start / peak / end values of `azure_managed_lustre_ost_bytes_used_percent`
@@ -606,7 +800,7 @@ Create the report at `reports/av-press-<run-base>.md` after each full run. Requi
 ## Cleanup
 - Run ID(s) cleaned up
 - Post-cleanup `azure_managed_lustre_ost_bytes_used_percent`
-- Node pool scaled back to 2 nodes (`az aks nodepool scale --name juicefspool --node-count 2`)
+- Node pool restored to baseline: autoscaler `min-count=2` if autoscaler is enabled, or `node-count=2` if autoscaler is disabled
 ```
 
 Use [reports/uae-lustre-24h-analysis-2026-05-19.md](reports/uae-lustre-24h-analysis-2026-05-19.md) as the narrative style reference.
@@ -627,7 +821,17 @@ kubectl delete job -n lustre-pressure-test waymo-dataset-download --ignore-not-f
 # 3. Delete the GCP credentials Secret — it is only needed during a download window
 kubectl delete secret -n lustre-pressure-test gcp-credentials --ignore-not-found
 
-# 4. Scale juicefspool back to its baseline size
+# 4. Scale juicefspool back to its baseline size.
+# If autoscaler is enabled, restore min-count and let AKS scale down asynchronously:
+az aks nodepool update \
+   --resource-group aks-test-rg \
+   --cluster-name aks-storage-test \
+   --name juicefspool \
+   --update-cluster-autoscaler \
+   --min-count 2 \
+   --max-count 20
+
+# If autoscaler is disabled, use direct node-count scaling instead:
 az aks nodepool scale \
    --resource-group aks-test-rg \
    --cluster-name aks-storage-test \
@@ -635,4 +839,4 @@ az aks nodepool scale \
    --node-count 2
 ```
 
-[deploy/pressure-test/waymo-download-job.yaml](deploy/pressure-test/waymo-download-job.yaml) is **kept in the repo** for reproducibility. Re-running it requires re-creating the `gcp-credentials` Secret (authorized_user ADC JSON, key `adc.json`) in the `lustre-pressure-test` namespace before `kubectl apply`. Never run it unless the dataset must be replaced — a stray re-run could overwrite `/mnt/lustre/waymo_v2/`.
+[deploy/pressure-test/waymo-download-job.yaml](deploy/pressure-test/waymo-download-job.yaml) is **kept in the repo** for reproducibility. The validated May 20 manifest uses rclone OAuth material in the `gcp-credentials` Secret (`client-id`, `client-secret`, `token.json`). If you switch back to an ADC-based flow, document the new required key names here before running. Never run the download Job unless the dataset must be replaced — a stray re-run could overwrite `/mnt/lustre/waymo_v2/`.
