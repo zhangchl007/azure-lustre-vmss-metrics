@@ -111,6 +111,7 @@ def _create_lustre_collector(
         lookback_minutes=settings.lustre_metrics_lookback_minutes,
         interval=settings.lustre_metrics_interval,
         max_workers=settings.lustre_metrics_max_workers,
+        request_jitter_seconds=settings.lustre_metrics_request_jitter_seconds,
         max_retries=settings.arg_max_retries,
         retry_base_delay_seconds=settings.arg_retry_base_delay_seconds,
     )

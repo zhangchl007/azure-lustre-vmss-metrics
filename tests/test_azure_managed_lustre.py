@@ -807,6 +807,7 @@ def test_collector_discovers_and_collects_metrics(monkeypatch: pytest.MonkeyPatc
         rg_client,
         metrics_client,
         ["sub-a"],
+        request_jitter_seconds=0,
         retry_base_delay_seconds=0,
     )
 
@@ -886,6 +887,7 @@ def test_collector_isolates_per_filesystem_metric_failures(
         TwoFilesystemResourceGraphClient(),
         PartiallyFailingMetricsClient(),
         ["sub-a"],
+        request_jitter_seconds=0,
         retry_base_delay_seconds=0,
     )
 
@@ -899,6 +901,81 @@ def test_collector_isolates_per_filesystem_metric_failures(
     assert result.error_count == 1
     assert len(result.metrics) == 1
     assert result.metrics[0].filesystem_name == "lustre-a"
+
+
+def test_collector_applies_per_filesystem_request_jitter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sleep_calls: list[float] = []
+    uniform_calls: list[tuple[float, float]] = []
+
+    def fake_uniform(lower: float, upper: float) -> float:
+        uniform_calls.append((lower, upper))
+        return 0.125
+
+    monkeypatch.setattr("vmss_metrics_exporter.azure_managed_lustre.random.uniform", fake_uniform)
+    monkeypatch.setattr(
+        "vmss_metrics_exporter.azure_managed_lustre.time.sleep",
+        lambda delay: sleep_calls.append(delay),
+    )
+    collector = AzureManagedLustreCollector(
+        FakeResourceGraphClient(),
+        FakeMetricsClient(),
+        ["sub-a"],
+        request_jitter_seconds=0.4,
+        retry_base_delay_seconds=0,
+    )
+
+    collector._collect_filesystem_metrics(
+        ManagedLustreFilesystem(
+            "sub-a",
+            "rg-a",
+            "lustre-a",
+            "/subscriptions/sub-a/resourceGroups/rg-a/providers/"
+            "Microsoft.StorageCache/amlFilesystems/lustre-a",
+            "westus3",
+        )
+    )
+
+    assert uniform_calls == [(0, 0.4)]
+    assert sleep_calls == [0.125]
+
+
+def test_collector_skips_request_jitter_when_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sleep_calls: list[float] = []
+    uniform_calls: list[tuple[float, float]] = []
+
+    monkeypatch.setattr(
+        "vmss_metrics_exporter.azure_managed_lustre.random.uniform",
+        lambda lower, upper: uniform_calls.append((lower, upper)) or 0.125,
+    )
+    monkeypatch.setattr(
+        "vmss_metrics_exporter.azure_managed_lustre.time.sleep",
+        lambda delay: sleep_calls.append(delay),
+    )
+    collector = AzureManagedLustreCollector(
+        FakeResourceGraphClient(),
+        FakeMetricsClient(),
+        ["sub-a"],
+        request_jitter_seconds=0,
+        retry_base_delay_seconds=0,
+    )
+
+    collector._collect_filesystem_metrics(
+        ManagedLustreFilesystem(
+            "sub-a",
+            "rg-a",
+            "lustre-a",
+            "/subscriptions/sub-a/resourceGroups/rg-a/providers/"
+            "Microsoft.StorageCache/amlFilesystems/lustre-a",
+            "westus3",
+        )
+    )
+
+    assert uniform_calls == []
+    assert sleep_calls == []
 
 
 def test_parse_iso_duration_accepts_monitor_intervals() -> None:

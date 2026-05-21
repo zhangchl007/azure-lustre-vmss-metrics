@@ -163,12 +163,17 @@ spec:
               value: "true"
             - name: LUSTRE_POLL_INTERVAL_SECONDS
               value: "60"
+            # Keep a generous Azure Monitor lookback so isolated sample drops
+            # do not produce empty responses. Freshness alerts still evaluate
+            # per-sample timestamps inside this window, not the window length.
             - name: LUSTRE_METRICS_LOOKBACK_MINUTES
               value: "15"
             - name: LUSTRE_METRICS_INTERVAL
               value: "PT1M"
             - name: LUSTRE_METRICS_MAX_WORKERS
               value: "4"
+            - name: LUSTRE_METRICS_REQUEST_JITTER_SECONDS
+              value: "0.5"
             # ----- Leader election (active/standby HA) --------------------
             - name: LEADER_ELECTION_ENABLED
               value: "true"

@@ -139,6 +139,7 @@ class AzureManagedLustreCollector:
         lookback_minutes: int = 15,
         interval: str = "PT1M",
         max_workers: int = 4,
+        request_jitter_seconds: float = 0.5,
         max_retries: int = 3,
         retry_base_delay_seconds: float = 1.0,
     ) -> None:
@@ -151,6 +152,7 @@ class AzureManagedLustreCollector:
         self._lookback = timedelta(minutes=lookback_minutes)
         self._granularity = parse_iso_duration(interval)
         self._max_workers = max_workers
+        self._request_jitter_seconds = request_jitter_seconds
         self._max_retries = max_retries
         self._retry_base_delay_seconds = retry_base_delay_seconds
 
@@ -289,6 +291,7 @@ class AzureManagedLustreCollector:
         # Azure Monitor caps each query_resource call at 20 metric names, so we
         # split LUSTRE_METRICS into batches and merge the per-batch responses
         # into a single synthetic response for normalization.
+        self._apply_request_jitter()
         merged_metrics: list[Any] = []
         for batch in _chunk_metric_names(
             LUSTRE_METRICS, AZURE_MONITOR_METRIC_NAMES_PER_REQUEST
@@ -305,6 +308,11 @@ class AzureManagedLustreCollector:
             )
             merged_metrics.extend(_iter_sequence_attr(response, "metrics"))
         return normalize_lustre_metrics_response(filesystem, {"metrics": merged_metrics})
+
+    def _apply_request_jitter(self) -> None:
+        if self._request_jitter_seconds <= 0:
+            return
+        time.sleep(random.uniform(0, self._request_jitter_seconds))
 
     def _execute_with_retry(self, operation: Any) -> object:
         attempt = 0

@@ -223,4 +223,4 @@ def _wrap_refresh_api_key_hook(configuration: object) -> None:
         refresh_api_key_hook(config)
         _normalize_bearer_token_scheme(config)
 
-    setattr(configuration, "refresh_api_key_hook", wrapped_refresh_api_key_hook)
+    configuration.refresh_api_key_hook = wrapped_refresh_api_key_hook

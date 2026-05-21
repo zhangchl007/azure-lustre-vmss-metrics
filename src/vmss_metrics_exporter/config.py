@@ -28,6 +28,7 @@ class Settings:
     lustre_metrics_lookback_minutes: int = 15
     lustre_metrics_interval: str = "PT1M"
     lustre_metrics_max_workers: int = 4
+    lustre_metrics_request_jitter_seconds: float = 0.5
     leader_election_enabled: bool = False
     leader_election_lock_name: str = "vmss-metrics-exporter"
     leader_election_namespace: str = "default"
@@ -76,6 +77,9 @@ def load_settings(*, require_subscription_ids: bool = True) -> Settings:
         lustre_metrics_interval=os.getenv("LUSTRE_METRICS_INTERVAL", "PT1M"),
         lustre_metrics_max_workers=_get_int(
             "LUSTRE_METRICS_MAX_WORKERS", default=4, minimum=1, maximum=32
+        ),
+        lustre_metrics_request_jitter_seconds=_get_float(
+            "LUSTRE_METRICS_REQUEST_JITTER_SECONDS", default=0.5, minimum=0.0, maximum=60.0
         ),
         **_load_leader_election_settings(),
     )

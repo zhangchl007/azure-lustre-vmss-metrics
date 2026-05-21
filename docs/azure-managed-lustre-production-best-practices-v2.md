@@ -311,7 +311,7 @@ These metrics are **not** published by Azure Monitor and are **not** in this rep
 - `/sys/kernel/debug/lnet/stats`
 - `/proc/sys/lnet/*` counters (kernel-version dependent)
 
-Typical implementation: a privileged DaemonSet on the AMLFS nodepool that periodically parses the above and writes a node-exporter textfile collector file.
+Typical implementation: a privileged DaemonSet on the AMLFS nodepool that periodically parses the above and writes a node-exporter textfile collector file. See [Appendix A](#a-lnet--d-state-textfile-collector-daemonset-sketch) for a minimal textfile-collector sketch.
 
 ### Why This Matters
 
@@ -343,6 +343,8 @@ Large-scale client environments may exhaust:
 ```bash
 ss -tan sport lt :1024 | wc -l
 ```
+
+For Prometheus ingestion, publish this as a node-local textfile-collector metric. See [Appendix A](#a-lnet--d-state-textfile-collector-daemonset-sketch).
 
 ### Recommended Thresholds
 
@@ -440,7 +442,7 @@ ps -eo state,pid,cmd | grep "^D"
 
 ### Recommended Metric
 
-D-state process count
+`lustre_dstate_process_count` from a node-local textfile collector. See [Appendix A](#a-lnet--d-state-textfile-collector-daemonset-sketch) for the collection pattern.
 
 ---
 
@@ -452,6 +454,8 @@ D-state process count
 dmesg | grep hung
 journalctl -k
 ```
+
+For alerting, publish a short-window counter/gauge such as `lustre_kernel_hung_task_recent` through the same node-local textfile collector described in [Appendix A](#a-lnet--d-state-textfile-collector-daemonset-sketch).
 
 ---
 
@@ -611,3 +615,135 @@ Therefore, production monitoring should prioritize:
 - CSI behavior
 - Mount density
 - Reconnect visibility
+
+---
+
+# A. LNet / D-state Textfile-Collector DaemonSet Sketch
+
+This appendix sketches the minimal client-side ingestion path for the LNet and client-health signals called out in §5 and §7. It is intentionally **documentation only**: do not ship this as-is without adapting the image, security policy, node labels, and scrape path to your cluster.
+
+## A.1 Placement and Security Model
+
+Run one privileged pod per AMLFS client node and keep it off general-purpose nodes.
+
+Recommended placement:
+
+- `nodeSelector` or node affinity that targets only the dedicated AMLFS nodepool, for example `workload.azure.com/amlfs-client: "true"`.
+- Tolerations for the AMLFS nodepool taint, for example `workload=amlfs:NoSchedule`.
+- `hostPID: true` so D-state process counts reflect the host, not only the collector container.
+- `securityContext.privileged: true` so the collector can read LNet debugfs and kernel logs.
+- Read-only host mounts for `/sys` and `/proc`.
+- A read-write hostPath mount for the node-exporter textfile directory, commonly `/var/lib/node_exporter/textfile_collector`.
+
+Pod Security / RBAC notes:
+
+- Kubernetes Pod Security Standards must allow the collector namespace to run privileged pods. On OpenShift, bind the collector service account to the privileged SCC.
+- Keep the service account narrow: it usually does not need Kubernetes API permissions if it only writes local textfile metrics.
+- Pin AMLFS nodepools to an AMLFS-supported kernel and client image pair as described in §8. On AKS, Ubuntu 22.04 with `5.15.0-*-azure` is a common supported baseline, but always verify against the current Azure Managed Lustre client support matrix.
+
+Partial pod spec sketch:
+
+```yaml
+hostPID: true
+nodeSelector:
+	workload.azure.com/amlfs-client: "true"
+tolerations:
+	- key: workload
+		operator: Equal
+		value: amlfs
+		effect: NoSchedule
+containers:
+	- name: lustre-client-textfile-collector
+		securityContext:
+			privileged: true
+			readOnlyRootFilesystem: true
+		volumeMounts:
+			- name: host-sys
+				mountPath: /host/sys
+				readOnly: true
+			- name: host-proc
+				mountPath: /host/proc
+				readOnly: true
+			- name: textfile-dir
+				mountPath: /textfile
+volumes:
+	- name: host-sys
+		hostPath:
+			path: /sys
+	- name: host-proc
+		hostPath:
+			path: /proc
+	- name: textfile-dir
+		hostPath:
+			path: /var/lib/node_exporter/textfile_collector
+			type: DirectoryOrCreate
+```
+
+## A.2 Collection Loop
+
+Run a short interval loop, for example every 30 seconds. Keep the loop local, bounded, and fail-open: if one probe fails, write the other metrics and expose a collector error metric.
+
+Recommended probes:
+
+| Source | Purpose | Example metric |
+|---|---|---|
+| `lnetctl net show -v` / `lnetctl peer show -v` | Peer state and reconnect visibility | `lustre_lnet_peer_state`, `lustre_lnet_reconnect_count`, `lustre_lnet_timeout_count`, `lustre_lnet_resend_count`, `lustre_lnet_connection_failures` |
+| `/sys/kernel/debug/lnet/stats` | LNet transport counters | `lustre_lnet_send_count`, `lustre_lnet_recv_count`, `lustre_lnet_drop_count` |
+| `ss -tan sport lt :1024 | wc -l` | Privileged source-port pressure | `lustre_privileged_ports_in_use` |
+| `ps -eo state | awk '/^D/ {n++} END {print n+0}'` | Host D-state process pressure | `lustre_dstate_process_count` |
+| `dmesg --since="-5min" | grep -ci 'hung_task\|lustre'` | Recent kernel hangs or Lustre client errors | `lustre_kernel_hung_task_recent` |
+
+Shell-style sketch:
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+TEXTFILE_DIR=${TEXTFILE_DIR:-/textfile}
+OUT="${TEXTFILE_DIR}/lustre_client.prom"
+TMP="${OUT}.$$"
+
+while true; do
+	{
+		echo "# HELP lustre_privileged_ports_in_use TCP sockets currently using privileged source ports."
+		echo "# TYPE lustre_privileged_ports_in_use gauge"
+		ss -tan sport lt :1024 | awk 'END {print "lustre_privileged_ports_in_use " NR-1}'
+
+		echo "# HELP lustre_dstate_process_count Host processes currently in D state."
+		echo "# TYPE lustre_dstate_process_count gauge"
+		ps -eo state | awk '/^D/ {n++} END {print "lustre_dstate_process_count " n+0}'
+
+		echo "# HELP lustre_kernel_hung_task_recent Recent kernel log lines matching hung_task or lustre."
+		echo "# TYPE lustre_kernel_hung_task_recent gauge"
+		dmesg --since="-5min" | grep -ci 'hung_task\|lustre' | awk '{print "lustre_kernel_hung_task_recent " $1}'
+
+		# Parse lnetctl JSON/YAML/text output in the real collector image and emit:
+		# lustre_lnet_reconnect_count{peer="..."} N
+		# lustre_lnet_timeout_count{peer="..."} N
+		# lustre_lnet_resend_count{peer="..."} N
+		# lustre_lnet_connection_failures{peer="..."} N
+		# lustre_lnet_peer_state{peer="...",state="up|down|recovery"} 0|1
+		# lustre_lnet_send_count N
+		# lustre_lnet_recv_count N
+		# lustre_lnet_drop_count N
+	} > "${TMP}"
+
+	mv "${TMP}" "${OUT}"
+	sleep 30
+done
+```
+
+Write the file atomically (`write temp` then `mv`) so node-exporter never scrapes a partially written `.prom` file.
+
+## A.3 Scrape Integration
+
+Use the existing node-exporter textfile-collector path when possible. That keeps the AMLFS client collector simple: it only writes `lustre_client.prom`; the existing Prometheus / Azure Monitor managed Prometheus scrape configuration picks it up with the rest of the node metrics.
+
+If node-exporter runs with a different textfile path, mount that hostPath instead and keep the same atomic write pattern.
+
+## A.4 Operational Guardrails
+
+- Alert on reconnect or timeout spikes, not only absolute counts.
+- Page on sustained privileged-port pressure above 70%, especially during node upgrades or pod restart storms.
+- Treat non-zero `lustre_dstate_process_count` plus increasing `lustre_kernel_hung_task_recent` as a client-health incident, even if AMLFS Azure Monitor server-side metrics still look healthy.
+- Keep labels low-cardinality. Peer labels are useful; process command labels are not.

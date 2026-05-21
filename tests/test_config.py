@@ -22,6 +22,7 @@ def test_load_settings_parses_subscriptions_and_deduplicates(
     assert settings.lustre_metrics_lookback_minutes == 15
     assert settings.lustre_metrics_interval == "PT1M"
     assert settings.lustre_metrics_max_workers == 4
+    assert settings.lustre_metrics_request_jitter_seconds == 0.5
 
 
 def test_placeholder_subscription_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -46,6 +47,7 @@ def test_lustre_settings_can_be_overridden(monkeypatch: pytest.MonkeyPatch) -> N
     monkeypatch.setenv("LUSTRE_METRICS_LOOKBACK_MINUTES", "30")
     monkeypatch.setenv("LUSTRE_METRICS_INTERVAL", "PT5M")
     monkeypatch.setenv("LUSTRE_METRICS_MAX_WORKERS", "8")
+    monkeypatch.setenv("LUSTRE_METRICS_REQUEST_JITTER_SECONDS", "0.25")
 
     settings = load_settings()
 
@@ -54,6 +56,7 @@ def test_lustre_settings_can_be_overridden(monkeypatch: pytest.MonkeyPatch) -> N
     assert settings.lustre_metrics_lookback_minutes == 30
     assert settings.lustre_metrics_interval == "PT5M"
     assert settings.lustre_metrics_max_workers == 8
+    assert settings.lustre_metrics_request_jitter_seconds == 0.25
 
 
 def test_lustre_boolean_setting_rejects_invalid_value(

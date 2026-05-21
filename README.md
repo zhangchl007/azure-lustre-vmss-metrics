@@ -111,9 +111,10 @@ Set configuration with environment variables. A local `.env` file is also suppor
 | `VMSS_METRICS_AUTH_MODE` | `auto` | `auto`, `service_principal`, or `workload_identity`. |
 | `ENABLE_MANAGED_LUSTRE_METRICS` | `true` | Enable Managed Lustre discovery and metrics. |
 | `LUSTRE_POLL_INTERVAL_SECONDS` | `60` | Managed Lustre collection interval. |
-| `LUSTRE_METRICS_LOOKBACK_MINUTES` | `15` | Azure Monitor lookback window. |
+| `LUSTRE_METRICS_LOOKBACK_MINUTES` | `15` | Azure Monitor lookback window. The 15-minute default tolerates isolated Azure Monitor sample gaps at the cost of more API work; shorter windows detect sustained stalls faster but can return empty windows during transient ingestion delays. |
 | `LUSTRE_METRICS_INTERVAL` | `PT1M` | Azure Monitor metric granularity. |
 | `LUSTRE_METRICS_MAX_WORKERS` | `4` | Concurrent Managed Lustre metric queries. |
+| `LUSTRE_METRICS_REQUEST_JITTER_SECONDS` | `0.5` | Maximum per-filesystem jitter before Azure Monitor metric queries, used to spread bursts and reduce 429 risk at scale. |
 | `LEADER_ELECTION_ENABLED` | `false` | Enable active/standby Kubernetes leader election. |
 | `LEADER_ELECTION_LOCK_NAME` | `vmss-metrics-exporter` | Leader-election lock name. |
 | `LEADER_ELECTION_NAMESPACE` | `default` | Leader-election namespace. |
