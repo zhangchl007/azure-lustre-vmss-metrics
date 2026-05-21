@@ -60,37 +60,37 @@
     {
       "type": "stat",
       "id": 2,
-      "title": "Min OST available %",
-      "description": "Primary data-capacity pressure signal.",
+      "title": "Worst OST available %",
+      "description": "Worst filesystem-level OST data-capacity pressure signal. The stat keeps the filesystem identity so fleet views show which Lustre filesystem needs attention.",
       "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
       "gridPos": {"h": 4, "w": 3, "x": 3, "y": 1},
-      "targets": [{"expr": "min(max by (subscription_id, resource_group, filesystem_name, location, ostnum) (azure_managed_lustre_ost_bytes_available_percent{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", filesystem_name=~\"$filesystem_name\", location=~\"$location\", ostnum=~\"$ostnum\"}))", "legendFormat": "min OST available %", "refId": "A"}],
+      "targets": [{"expr": "bottomk(1, min by (subscription_id, resource_group, filesystem_name, location) (max by (subscription_id, resource_group, filesystem_name, location, ostnum) (azure_managed_lustre_ost_bytes_available_percent{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", filesystem_name=~\"$filesystem_name\", location=~\"$location\", ostnum=~\"$ostnum\"})))", "legendFormat": "{{resource_group}}/{{filesystem_name}}", "refId": "A"}],
       "fieldConfig": {"defaults": {"unit": "percent", "decimals": 2, "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "orange", "value": 20}, {"color": "green", "value": 25}]}}, "overrides": []},
-      "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "colorMode": "background", "graphMode": "none", "justifyMode": "auto", "textMode": "auto"},
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "colorMode": "background", "graphMode": "none", "justifyMode": "auto", "textMode": "value_and_name"},
       "pluginVersion": "10.4.0"
     },
     {
       "type": "stat",
       "id": 3,
-      "title": "Min MDT files free %",
-      "description": "Primary metadata file/inode exhaustion signal.",
+      "title": "Worst MDT files free %",
+      "description": "Worst filesystem-level metadata file/inode exhaustion signal. The stat keeps the filesystem identity for multi-filesystem fleet views.",
       "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
       "gridPos": {"h": 4, "w": 3, "x": 6, "y": 1},
-      "targets": [{"expr": "min(max by (subscription_id, resource_group, filesystem_name, location, mdtnum) (azure_managed_lustre_mdt_files_free_percent{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", filesystem_name=~\"$filesystem_name\", location=~\"$location\", mdtnum=~\"$mdtnum\"}))", "legendFormat": "min MDT files free %", "refId": "A"}],
+      "targets": [{"expr": "bottomk(1, min by (subscription_id, resource_group, filesystem_name, location) (max by (subscription_id, resource_group, filesystem_name, location, mdtnum) (azure_managed_lustre_mdt_files_free_percent{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", filesystem_name=~\"$filesystem_name\", location=~\"$location\", mdtnum=~\"$mdtnum\"})))", "legendFormat": "{{resource_group}}/{{filesystem_name}}", "refId": "A"}],
       "fieldConfig": {"defaults": {"unit": "percent", "decimals": 2, "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "orange", "value": 15}, {"color": "green", "value": 30}]}}, "overrides": []},
-      "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "colorMode": "background", "graphMode": "none", "justifyMode": "auto", "textMode": "auto"},
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "colorMode": "background", "graphMode": "none", "justifyMode": "auto", "textMode": "value_and_name"},
       "pluginVersion": "10.4.0"
     },
     {
       "type": "stat",
       "id": 4,
-      "title": "Min MDT bytes available %",
-      "description": "MDT storage-capacity pressure signal.",
+      "title": "Worst MDT bytes available %",
+      "description": "Worst filesystem-level MDT storage-capacity pressure signal. The stat keeps the filesystem identity for multi-filesystem fleet views.",
       "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
       "gridPos": {"h": 4, "w": 3, "x": 9, "y": 1},
-      "targets": [{"expr": "min(max by (subscription_id, resource_group, filesystem_name, location, mdtnum) (azure_managed_lustre_mdt_bytes_available_percent{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", filesystem_name=~\"$filesystem_name\", location=~\"$location\", mdtnum=~\"$mdtnum\"}))", "legendFormat": "min MDT bytes available %", "refId": "A"}],
+      "targets": [{"expr": "bottomk(1, min by (subscription_id, resource_group, filesystem_name, location) (max by (subscription_id, resource_group, filesystem_name, location, mdtnum) (azure_managed_lustre_mdt_bytes_available_percent{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", filesystem_name=~\"$filesystem_name\", location=~\"$location\", mdtnum=~\"$mdtnum\"})))", "legendFormat": "{{resource_group}}/{{filesystem_name}}", "refId": "A"}],
       "fieldConfig": {"defaults": {"unit": "percent", "decimals": 2, "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "orange", "value": 10}, {"color": "green", "value": 25}]}}, "overrides": []},
-      "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "colorMode": "background", "graphMode": "none", "justifyMode": "auto", "textMode": "auto"},
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "colorMode": "background", "graphMode": "none", "justifyMode": "auto", "textMode": "value_and_name"},
       "pluginVersion": "10.4.0"
     },
     {
@@ -108,25 +108,25 @@
     {
       "type": "stat",
       "id": 6,
-      "title": "Max OST sample age",
-      "description": "Maximum Azure Monitor OST sample age in seconds.",
+      "title": "Stalest OST sample",
+      "description": "Oldest filesystem-level Azure Monitor OST sample age in seconds. The stat keeps the filesystem identity for multi-filesystem freshness triage.",
       "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
       "gridPos": {"h": 4, "w": 3, "x": 15, "y": 1},
-      "targets": [{"expr": "max(time() - azure_managed_lustre_ost_sample_timestamp_seconds{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", filesystem_name=~\"$filesystem_name\", location=~\"$location\", ostnum=~\"$ostnum\"})", "legendFormat": "OST sample age", "refId": "A"}],
+      "targets": [{"expr": "topk(1, max by (subscription_id, resource_group, filesystem_name, location) (time() - azure_managed_lustre_ost_sample_timestamp_seconds{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", filesystem_name=~\"$filesystem_name\", location=~\"$location\", ostnum=~\"$ostnum\"}))", "legendFormat": "{{resource_group}}/{{filesystem_name}}", "refId": "A"}],
       "fieldConfig": {"defaults": {"unit": "s", "decimals": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "orange", "value": 180}, {"color": "red", "value": 300}]}}, "overrides": []},
-      "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "colorMode": "background", "graphMode": "none", "justifyMode": "auto", "textMode": "auto"},
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "colorMode": "background", "graphMode": "none", "justifyMode": "auto", "textMode": "value_and_name"},
       "pluginVersion": "10.4.0"
     },
     {
       "type": "stat",
       "id": 7,
-      "title": "Max MDT sample age",
-      "description": "Maximum Azure Monitor MDT sample age in seconds.",
+      "title": "Stalest MDT sample",
+      "description": "Oldest filesystem-level Azure Monitor MDT sample age in seconds. The stat keeps the filesystem identity for multi-filesystem freshness triage.",
       "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
       "gridPos": {"h": 4, "w": 3, "x": 18, "y": 1},
-      "targets": [{"expr": "max(time() - azure_managed_lustre_mdt_sample_timestamp_seconds{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", filesystem_name=~\"$filesystem_name\", location=~\"$location\", mdtnum=~\"$mdtnum\"})", "legendFormat": "MDT sample age", "refId": "A"}],
+      "targets": [{"expr": "topk(1, max by (subscription_id, resource_group, filesystem_name, location) (time() - azure_managed_lustre_mdt_sample_timestamp_seconds{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", filesystem_name=~\"$filesystem_name\", location=~\"$location\", mdtnum=~\"$mdtnum\"}))", "legendFormat": "{{resource_group}}/{{filesystem_name}}", "refId": "A"}],
       "fieldConfig": {"defaults": {"unit": "s", "decimals": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "orange", "value": 180}, {"color": "red", "value": 300}]}}, "overrides": []},
-      "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "colorMode": "background", "graphMode": "none", "justifyMode": "auto", "textMode": "auto"},
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "colorMode": "background", "graphMode": "none", "justifyMode": "auto", "textMode": "value_and_name"},
       "pluginVersion": "10.4.0"
     },
     {
@@ -157,7 +157,7 @@
       "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
       "gridPos": {"h": 10, "w": 8, "x": 0, "y": 6},
       "targets": [{"expr": "bottomk($top_n, azure_managed_lustre_ost_bytes_available_percent{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", filesystem_name=~\"$filesystem_name\", location=~\"$location\", ostnum=~\"$ostnum\"})", "legendFormat": "{{filesystem_name}} · OST {{ostnum}}", "refId": "A"}],
-      "fieldConfig": {"defaults": {"unit": "percent", "decimals": 2, "min": 0, "custom": {"drawStyle": "line", "lineInterpolation": "stepAfter", "lineWidth": 2, "fillOpacity": 0, "showPoints": "never", "spanNulls": true, "stacking": {"mode": "none", "group": "A"}}}, "overrides": []},
+      "fieldConfig": {"defaults": {"unit": "percent", "decimals": 2, "min": 0, "color": {"mode": "palette-classic"}, "custom": {"drawStyle": "line", "lineInterpolation": "stepAfter", "lineWidth": 2, "fillOpacity": 0, "showPoints": "never", "spanNulls": true, "stacking": {"mode": "none", "group": "A"}}}, "overrides": []},
       "options": {"legend": {"displayMode": "table", "placement": "bottom", "showLegend": true, "calcs": ["lastNotNull", "min"]}, "tooltip": {"mode": "multi", "sort": "asc"}}
     },
     {
@@ -168,7 +168,7 @@
       "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
       "gridPos": {"h": 10, "w": 8, "x": 8, "y": 6},
       "targets": [{"expr": "bottomk($top_n, azure_managed_lustre_mdt_files_free_percent{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", filesystem_name=~\"$filesystem_name\", location=~\"$location\", mdtnum=~\"$mdtnum\"})", "legendFormat": "{{filesystem_name}} · MDT {{mdtnum}}", "refId": "A"}],
-      "fieldConfig": {"defaults": {"unit": "percent", "decimals": 2, "min": 0, "custom": {"drawStyle": "line", "lineInterpolation": "stepAfter", "lineWidth": 2, "fillOpacity": 0, "showPoints": "never", "spanNulls": true, "stacking": {"mode": "none", "group": "A"}}}, "overrides": []},
+      "fieldConfig": {"defaults": {"unit": "percent", "decimals": 2, "min": 0, "color": {"mode": "palette-classic"}, "custom": {"drawStyle": "line", "lineInterpolation": "stepAfter", "lineWidth": 2, "fillOpacity": 0, "showPoints": "never", "spanNulls": true, "stacking": {"mode": "none", "group": "A"}}}, "overrides": []},
       "options": {"legend": {"displayMode": "table", "placement": "bottom", "showLegend": true, "calcs": ["lastNotNull", "min"]}, "tooltip": {"mode": "multi", "sort": "asc"}}
     },
     {
@@ -179,7 +179,7 @@
       "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
       "gridPos": {"h": 10, "w": 8, "x": 16, "y": 6},
       "targets": [{"expr": "bottomk($top_n, azure_managed_lustre_mdt_bytes_available_percent{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", filesystem_name=~\"$filesystem_name\", location=~\"$location\", mdtnum=~\"$mdtnum\"})", "legendFormat": "{{filesystem_name}} · MDT {{mdtnum}}", "refId": "A"}],
-      "fieldConfig": {"defaults": {"unit": "percent", "decimals": 2, "min": 0, "custom": {"drawStyle": "line", "lineInterpolation": "stepAfter", "lineWidth": 2, "fillOpacity": 0, "showPoints": "never", "spanNulls": true, "stacking": {"mode": "none", "group": "A"}}}, "overrides": []},
+      "fieldConfig": {"defaults": {"unit": "percent", "decimals": 2, "min": 0, "color": {"mode": "palette-classic"}, "custom": {"drawStyle": "line", "lineInterpolation": "stepAfter", "lineWidth": 2, "fillOpacity": 0, "showPoints": "never", "spanNulls": true, "stacking": {"mode": "none", "group": "A"}}}, "overrides": []},
       "options": {"legend": {"displayMode": "table", "placement": "bottom", "showLegend": true, "calcs": ["lastNotNull", "min"]}, "tooltip": {"mode": "multi", "sort": "asc"}}
     },
     {
@@ -201,7 +201,7 @@
         {"expr": "topk($top_n, sum by (filesystem_name) (azure_managed_lustre_client_read_throughput_bytes_per_second{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", filesystem_name=~\"$filesystem_name\", location=~\"$location\", ostnum=~\"$ostnum\"}))", "legendFormat": "read · {{filesystem_name}}", "refId": "A"},
         {"expr": "topk($top_n, sum by (filesystem_name) (azure_managed_lustre_client_write_throughput_bytes_per_second{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", filesystem_name=~\"$filesystem_name\", location=~\"$location\", ostnum=~\"$ostnum\"}))", "legendFormat": "write · {{filesystem_name}}", "refId": "B"}
       ],
-      "fieldConfig": {"defaults": {"unit": "Bps", "decimals": 2, "min": 0, "custom": {"drawStyle": "line", "lineInterpolation": "smooth", "lineWidth": 2, "fillOpacity": 15, "showPoints": "never", "spanNulls": true, "stacking": {"mode": "none", "group": "A"}}}, "overrides": []},
+      "fieldConfig": {"defaults": {"unit": "Bps", "decimals": 2, "min": 0, "color": {"mode": "palette-classic"}, "custom": {"drawStyle": "line", "lineInterpolation": "smooth", "lineWidth": 2, "fillOpacity": 15, "showPoints": "never", "spanNulls": true, "stacking": {"mode": "none", "group": "A"}}}, "overrides": []},
       "options": {"legend": {"displayMode": "table", "placement": "bottom", "showLegend": true, "calcs": ["lastNotNull", "max"]}, "tooltip": {"mode": "multi", "sort": "desc"}}
     },
     {
@@ -215,7 +215,7 @@
         {"expr": "topk($top_n, sum by (filesystem_name) (azure_managed_lustre_client_read_ops{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", filesystem_name=~\"$filesystem_name\", location=~\"$location\", ostnum=~\"$ostnum\"}))", "legendFormat": "read ops · {{filesystem_name}}", "refId": "A"},
         {"expr": "topk($top_n, sum by (filesystem_name) (azure_managed_lustre_client_write_ops{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", filesystem_name=~\"$filesystem_name\", location=~\"$location\", ostnum=~\"$ostnum\"}))", "legendFormat": "write ops · {{filesystem_name}}", "refId": "B"}
       ],
-      "fieldConfig": {"defaults": {"unit": "ops", "decimals": 2, "min": 0, "custom": {"drawStyle": "line", "lineInterpolation": "smooth", "lineWidth": 2, "fillOpacity": 15, "showPoints": "never", "spanNulls": true, "stacking": {"mode": "none", "group": "A"}}}, "overrides": []},
+      "fieldConfig": {"defaults": {"unit": "ops", "decimals": 2, "min": 0, "color": {"mode": "palette-classic"}, "custom": {"drawStyle": "line", "lineInterpolation": "smooth", "lineWidth": 2, "fillOpacity": 15, "showPoints": "never", "spanNulls": true, "stacking": {"mode": "none", "group": "A"}}}, "overrides": []},
       "options": {"legend": {"displayMode": "table", "placement": "bottom", "showLegend": true, "calcs": ["lastNotNull", "max"]}, "tooltip": {"mode": "multi", "sort": "desc"}}
     },
     {
@@ -236,7 +236,7 @@
       "targets": [
         {"expr": "topk($top_n, max by (filesystem_name, ostnum, operation) (azure_managed_lustre_ost_client_latency_milliseconds{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", filesystem_name=~\"$filesystem_name\", location=~\"$location\", ostnum=~\"$ostnum\"}))", "legendFormat": "{{filesystem_name}} · OST {{ostnum}} · {{operation}}", "refId": "A"}
       ],
-      "fieldConfig": {"defaults": {"unit": "ms", "decimals": 2, "min": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 10}, {"color": "orange", "value": 50}, {"color": "red", "value": 100}, {"color": "dark-red", "value": 500}, {"color": "purple", "value": 1000}]}, "custom": {"drawStyle": "line", "lineInterpolation": "smooth", "lineWidth": 2, "fillOpacity": 10, "showPoints": "never", "spanNulls": true, "stacking": {"mode": "none", "group": "A"}}}, "overrides": []},
+      "fieldConfig": {"defaults": {"unit": "ms", "decimals": 2, "min": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 10}, {"color": "orange", "value": 50}, {"color": "red", "value": 100}, {"color": "dark-red", "value": 500}, {"color": "purple", "value": 1000}]}, "color": {"mode": "palette-classic"}, "custom": {"drawStyle": "line", "lineInterpolation": "smooth", "lineWidth": 2, "fillOpacity": 10, "showPoints": "never", "spanNulls": true, "stacking": {"mode": "none", "group": "A"}}}, "overrides": []},
       "options": {"legend": {"displayMode": "table", "placement": "bottom", "showLegend": true, "calcs": ["lastNotNull", "max"]}, "tooltip": {"mode": "multi", "sort": "desc"}}
     },
     {
@@ -249,7 +249,7 @@
       "targets": [
         {"expr": "topk($top_n, max by (filesystem_name, ostnum, operation) (azure_managed_lustre_ost_client_ops{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", filesystem_name=~\"$filesystem_name\", location=~\"$location\", ostnum=~\"$ostnum\"}))", "legendFormat": "{{filesystem_name}} · OST {{ostnum}} · {{operation}}", "refId": "A"}
       ],
-      "fieldConfig": {"defaults": {"unit": "ops", "decimals": 2, "min": 0, "custom": {"drawStyle": "line", "lineInterpolation": "smooth", "lineWidth": 2, "fillOpacity": 10, "showPoints": "never", "spanNulls": true, "stacking": {"mode": "none", "group": "A"}}}, "overrides": []},
+      "fieldConfig": {"defaults": {"unit": "ops", "decimals": 2, "min": 0, "color": {"mode": "palette-classic"}, "custom": {"drawStyle": "line", "lineInterpolation": "smooth", "lineWidth": 2, "fillOpacity": 10, "showPoints": "never", "spanNulls": true, "stacking": {"mode": "none", "group": "A"}}}, "overrides": []},
       "options": {"legend": {"displayMode": "table", "placement": "bottom", "showLegend": true, "calcs": ["lastNotNull", "max"]}, "tooltip": {"mode": "multi", "sort": "desc"}}
     },
     {
@@ -262,7 +262,7 @@
       "targets": [
         {"expr": "topk($top_n, max by (filesystem_name, mdtnum, operation) (azure_managed_lustre_mdt_client_latency_milliseconds{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", filesystem_name=~\"$filesystem_name\", location=~\"$location\", mdtnum=~\"$mdtnum\"}))", "legendFormat": "{{filesystem_name}} · MDT {{mdtnum}} · {{operation}}", "refId": "A"}
       ],
-      "fieldConfig": {"defaults": {"unit": "ms", "decimals": 2, "min": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 10}, {"color": "orange", "value": 50}, {"color": "red", "value": 100}, {"color": "dark-red", "value": 500}, {"color": "purple", "value": 1000}]}, "custom": {"drawStyle": "line", "lineInterpolation": "smooth", "lineWidth": 2, "fillOpacity": 10, "showPoints": "never", "spanNulls": true, "stacking": {"mode": "none", "group": "A"}}}, "overrides": []},
+      "fieldConfig": {"defaults": {"unit": "ms", "decimals": 2, "min": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 10}, {"color": "orange", "value": 50}, {"color": "red", "value": 100}, {"color": "dark-red", "value": 500}, {"color": "purple", "value": 1000}]}, "color": {"mode": "palette-classic"}, "custom": {"drawStyle": "line", "lineInterpolation": "smooth", "lineWidth": 2, "fillOpacity": 10, "showPoints": "never", "spanNulls": true, "stacking": {"mode": "none", "group": "A"}}}, "overrides": []},
       "options": {"legend": {"displayMode": "table", "placement": "bottom", "showLegend": true, "calcs": ["lastNotNull", "max"]}, "tooltip": {"mode": "multi", "sort": "desc"}}
     },
     {
@@ -275,7 +275,7 @@
       "targets": [
         {"expr": "topk($top_n, max by (filesystem_name, mdtnum, operation) (azure_managed_lustre_mdt_client_ops{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", filesystem_name=~\"$filesystem_name\", location=~\"$location\", mdtnum=~\"$mdtnum\"}))", "legendFormat": "{{filesystem_name}} · MDT {{mdtnum}} · {{operation}}", "refId": "A"}
       ],
-      "fieldConfig": {"defaults": {"unit": "ops", "decimals": 2, "min": 0, "custom": {"drawStyle": "line", "lineInterpolation": "smooth", "lineWidth": 2, "fillOpacity": 10, "showPoints": "never", "spanNulls": true, "stacking": {"mode": "none", "group": "A"}}}, "overrides": []},
+      "fieldConfig": {"defaults": {"unit": "ops", "decimals": 2, "min": 0, "color": {"mode": "palette-classic"}, "custom": {"drawStyle": "line", "lineInterpolation": "smooth", "lineWidth": 2, "fillOpacity": 10, "showPoints": "never", "spanNulls": true, "stacking": {"mode": "none", "group": "A"}}}, "overrides": []},
       "options": {"legend": {"displayMode": "table", "placement": "bottom", "showLegend": true, "calcs": ["lastNotNull", "max"]}, "tooltip": {"mode": "multi", "sort": "desc"}}
     },
     {
@@ -320,7 +320,7 @@
       "targets": [
         {"expr": "topk($top_n, max by (filesystem_name, mdtnum) (azure_managed_lustre_hsm_action_errors{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", filesystem_name=~\"$filesystem_name\", location=~\"$location\", mdtnum=~\"$mdtnum\"}))", "legendFormat": "{{filesystem_name}} · MDT {{mdtnum}}", "refId": "A"}
       ],
-      "fieldConfig": {"defaults": {"decimals": 2, "min": 0, "custom": {"drawStyle": "line", "lineInterpolation": "smooth", "lineWidth": 2, "fillOpacity": 10, "showPoints": "never", "spanNulls": true, "stacking": {"mode": "none", "group": "A"}}}, "overrides": []},
+      "fieldConfig": {"defaults": {"decimals": 2, "min": 0, "color": {"mode": "palette-classic"}, "custom": {"drawStyle": "line", "lineInterpolation": "smooth", "lineWidth": 2, "fillOpacity": 10, "showPoints": "never", "spanNulls": true, "stacking": {"mode": "none", "group": "A"}}}, "overrides": []},
       "options": {"legend": {"displayMode": "table", "placement": "bottom", "showLegend": true, "calcs": ["lastNotNull", "max"]}, "tooltip": {"mode": "multi", "sort": "desc"}}
     },
     {
@@ -334,7 +334,7 @@
         {"expr": "topk($top_n, max by (filesystem_name, mdtnum) (azure_managed_lustre_hsm_current_requests{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", filesystem_name=~\"$filesystem_name\", location=~\"$location\", mdtnum=~\"$mdtnum\"}))", "legendFormat": "{{filesystem_name}} · MDT {{mdtnum}}", "refId": "A"},
         {"expr": "vector($hsm_inflight_warn)", "legendFormat": "HSM warn threshold", "refId": "B"}
       ],
-      "fieldConfig": {"defaults": {"decimals": 2, "min": 0, "custom": {"drawStyle": "line", "lineInterpolation": "smooth", "lineWidth": 2, "fillOpacity": 10, "showPoints": "never", "spanNulls": true, "stacking": {"mode": "none", "group": "A"}}}, "overrides": []},
+      "fieldConfig": {"defaults": {"decimals": 2, "min": 0, "color": {"mode": "palette-classic"}, "custom": {"drawStyle": "line", "lineInterpolation": "smooth", "lineWidth": 2, "fillOpacity": 10, "showPoints": "never", "spanNulls": true, "stacking": {"mode": "none", "group": "A"}}}, "overrides": []},
       "options": {"legend": {"displayMode": "table", "placement": "bottom", "showLegend": true, "calcs": ["lastNotNull", "max"]}, "tooltip": {"mode": "multi", "sort": "desc"}}
     },
     {
@@ -392,7 +392,7 @@
       "targets": [
         {"expr": "topk($top_n, max by (filesystem_name, ostnum) (azure_managed_lustre_ost_connected_clients{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", filesystem_name=~\"$filesystem_name\", location=~\"$location\", ostnum=~\"$ostnum\"}))", "legendFormat": "{{filesystem_name}} \u00b7 OST {{ostnum}}", "refId": "A"}
       ],
-      "fieldConfig": {"defaults": {"unit": "short", "decimals": 0, "min": 0, "custom": {"drawStyle": "line", "lineInterpolation": "stepAfter", "lineWidth": 2, "fillOpacity": 0, "showPoints": "never", "spanNulls": true, "stacking": {"mode": "none", "group": "A"}}}, "overrides": []},
+      "fieldConfig": {"defaults": {"unit": "short", "decimals": 0, "min": 0, "color": {"mode": "palette-classic"}, "custom": {"drawStyle": "line", "lineInterpolation": "stepAfter", "lineWidth": 2, "fillOpacity": 0, "showPoints": "never", "spanNulls": true, "stacking": {"mode": "none", "group": "A"}}}, "overrides": []},
       "options": {"legend": {"displayMode": "table", "placement": "bottom", "showLegend": true, "calcs": ["lastNotNull", "max", "min"]}, "tooltip": {"mode": "multi", "sort": "desc"}}
     },
     {
@@ -405,7 +405,7 @@
       "targets": [
         {"expr": "topk($top_n, max by (filesystem_name, mdtnum) (azure_managed_lustre_mdt_connected_clients{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", filesystem_name=~\"$filesystem_name\", location=~\"$location\", mdtnum=~\"$mdtnum\"}))", "legendFormat": "{{filesystem_name}} \u00b7 MDT {{mdtnum}}", "refId": "A"}
       ],
-      "fieldConfig": {"defaults": {"unit": "short", "decimals": 0, "min": 0, "custom": {"drawStyle": "line", "lineInterpolation": "stepAfter", "lineWidth": 2, "fillOpacity": 0, "showPoints": "never", "spanNulls": true, "stacking": {"mode": "none", "group": "A"}}}, "overrides": []},
+      "fieldConfig": {"defaults": {"unit": "short", "decimals": 0, "min": 0, "color": {"mode": "palette-classic"}, "custom": {"drawStyle": "line", "lineInterpolation": "stepAfter", "lineWidth": 2, "fillOpacity": 0, "showPoints": "never", "spanNulls": true, "stacking": {"mode": "none", "group": "A"}}}, "overrides": []},
       "options": {"legend": {"displayMode": "table", "placement": "bottom", "showLegend": true, "calcs": ["lastNotNull", "max", "min"]}, "tooltip": {"mode": "multi", "sort": "desc"}}
     },
     {
@@ -449,7 +449,7 @@
       "targets": [
         {"expr": "topk($top_n, max by (subscription_id, resource_group, filesystem_name, location, ostnum) (azure_managed_lustre_ost_bytes_used_percent{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", filesystem_name=~\"$filesystem_name\", location=~\"$location\", ostnum=~\"$ostnum\"}))", "legendFormat": "{{filesystem_name}} · OST {{ostnum}}", "refId": "A"}
       ],
-      "fieldConfig": {"defaults": {"unit": "percent", "decimals": 2, "min": 0, "max": 100, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "orange", "value": 75}, {"color": "red", "value": 80}]}, "custom": {"drawStyle": "line", "lineInterpolation": "stepAfter", "lineWidth": 2, "fillOpacity": 10, "showPoints": "never", "spanNulls": true, "stacking": {"mode": "none", "group": "A"}}}, "overrides": []},
+      "fieldConfig": {"defaults": {"unit": "percent", "decimals": 2, "min": 0, "max": 100, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "orange", "value": 75}, {"color": "red", "value": 80}]}, "color": {"mode": "palette-classic"}, "custom": {"drawStyle": "line", "lineInterpolation": "stepAfter", "lineWidth": 2, "fillOpacity": 10, "showPoints": "never", "spanNulls": true, "stacking": {"mode": "none", "group": "A"}}}, "overrides": []},
       "options": {"legend": {"displayMode": "table", "placement": "bottom", "showLegend": true, "calcs": ["lastNotNull", "max"]}, "tooltip": {"mode": "multi", "sort": "desc"}}
     },
     {
@@ -462,7 +462,7 @@
       "targets": [
         {"expr": "topk($top_n, max by (subscription_id, resource_group, filesystem_name, location, mdtnum) (azure_managed_lustre_mdt_bytes_used_percent{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", filesystem_name=~\"$filesystem_name\", location=~\"$location\", mdtnum=~\"$mdtnum\"}))", "legendFormat": "{{filesystem_name}} · MDT {{mdtnum}}", "refId": "A"}
       ],
-      "fieldConfig": {"defaults": {"unit": "percent", "decimals": 2, "min": 0, "max": 100, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "orange", "value": 75}, {"color": "red", "value": 90}]}, "custom": {"drawStyle": "line", "lineInterpolation": "stepAfter", "lineWidth": 2, "fillOpacity": 10, "showPoints": "never", "spanNulls": true, "stacking": {"mode": "none", "group": "A"}}}, "overrides": []},
+      "fieldConfig": {"defaults": {"unit": "percent", "decimals": 2, "min": 0, "max": 100, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "orange", "value": 75}, {"color": "red", "value": 90}]}, "color": {"mode": "palette-classic"}, "custom": {"drawStyle": "line", "lineInterpolation": "stepAfter", "lineWidth": 2, "fillOpacity": 10, "showPoints": "never", "spanNulls": true, "stacking": {"mode": "none", "group": "A"}}}, "overrides": []},
       "options": {"legend": {"displayMode": "table", "placement": "bottom", "showLegend": true, "calcs": ["lastNotNull", "max"]}, "tooltip": {"mode": "multi", "sort": "desc"}}
     },
     {
@@ -475,7 +475,7 @@
       "targets": [
         {"expr": "topk($top_n, max by (subscription_id, resource_group, filesystem_name, location, mdtnum) (azure_managed_lustre_mdt_files_used_percent{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", filesystem_name=~\"$filesystem_name\", location=~\"$location\", mdtnum=~\"$mdtnum\"}))", "legendFormat": "{{filesystem_name}} · MDT {{mdtnum}}", "refId": "A"}
       ],
-      "fieldConfig": {"defaults": {"unit": "percent", "decimals": 2, "min": 0, "max": 100, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "orange", "value": 70}, {"color": "red", "value": 85}]}, "custom": {"drawStyle": "line", "lineInterpolation": "stepAfter", "lineWidth": 2, "fillOpacity": 10, "showPoints": "never", "spanNulls": true, "stacking": {"mode": "none", "group": "A"}}}, "overrides": []},
+      "fieldConfig": {"defaults": {"unit": "percent", "decimals": 2, "min": 0, "max": 100, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "orange", "value": 70}, {"color": "red", "value": 85}]}, "color": {"mode": "palette-classic"}, "custom": {"drawStyle": "line", "lineInterpolation": "stepAfter", "lineWidth": 2, "fillOpacity": 10, "showPoints": "never", "spanNulls": true, "stacking": {"mode": "none", "group": "A"}}}, "overrides": []},
       "options": {"legend": {"displayMode": "table", "placement": "bottom", "showLegend": true, "calcs": ["lastNotNull", "max"]}, "tooltip": {"mode": "multi", "sort": "desc"}}
     },
     {
@@ -544,7 +544,7 @@
       "targets": [
         {"expr": "topk($top_n, max by (filesystem_name) (azure_managed_lustre_metadata_amplification_ratio{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", filesystem_name=~\"$filesystem_name\", location=~\"$location\"}))", "legendFormat": "{{filesystem_name}}", "refId": "A"}
       ],
-      "fieldConfig": {"defaults": {"unit": "short", "decimals": 3, "min": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "orange", "value": 10}, {"color": "red", "value": 100}]}, "custom": {"drawStyle": "line", "lineInterpolation": "smooth", "lineWidth": 2, "fillOpacity": 10, "showPoints": "never", "spanNulls": true, "stacking": {"mode": "none", "group": "A"}}}, "overrides": []},
+      "fieldConfig": {"defaults": {"unit": "short", "decimals": 3, "min": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "orange", "value": 10}, {"color": "red", "value": 100}]}, "color": {"mode": "palette-classic"}, "custom": {"drawStyle": "line", "lineInterpolation": "smooth", "lineWidth": 2, "fillOpacity": 10, "showPoints": "never", "spanNulls": true, "stacking": {"mode": "none", "group": "A"}}}, "overrides": []},
       "options": {"legend": {"displayMode": "table", "placement": "bottom", "showLegend": true, "calcs": ["lastNotNull", "max"]}, "tooltip": {"mode": "multi", "sort": "desc"}}
     },
     {
@@ -557,7 +557,7 @@
       "targets": [
         {"expr": "topk($top_n, max by (filesystem_name) (azure_managed_lustre_filesystem_sample_max_age_seconds{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", filesystem_name=~\"$filesystem_name\", location=~\"$location\"}))", "legendFormat": "{{filesystem_name}}", "refId": "A"}
       ],
-      "fieldConfig": {"defaults": {"unit": "s", "decimals": 0, "min": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "orange", "value": 180}, {"color": "red", "value": 300}]}, "custom": {"drawStyle": "line", "lineInterpolation": "stepAfter", "lineWidth": 2, "fillOpacity": 10, "showPoints": "never", "spanNulls": true, "stacking": {"mode": "none", "group": "A"}}}, "overrides": []},
+      "fieldConfig": {"defaults": {"unit": "s", "decimals": 0, "min": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "orange", "value": 180}, {"color": "red", "value": 300}]}, "color": {"mode": "palette-classic"}, "custom": {"drawStyle": "line", "lineInterpolation": "stepAfter", "lineWidth": 2, "fillOpacity": 10, "showPoints": "never", "spanNulls": true, "stacking": {"mode": "none", "group": "A"}}}, "overrides": []},
       "options": {"legend": {"displayMode": "table", "placement": "bottom", "showLegend": true, "calcs": ["lastNotNull", "max"]}, "tooltip": {"mode": "multi", "sort": "desc"}}
     }
   ],
@@ -586,6 +586,6 @@
   "timezone": "",
   "title": "Azure Managed Lustre Key Metrics",
   "uid": "azure-managed-lustre-key-metrics",
-  "version": 3,
+  "version": 5,
   "weekStart": ""
 }
