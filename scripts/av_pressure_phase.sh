@@ -116,12 +116,58 @@ fi
 
 command -v kubectl >/dev/null || { echo "ERROR: kubectl not on PATH" >&2; exit 127; }
 
+delete_job_if_exists() {
+   local job="$1"
+   if ! kubectl get job -n "$NAMESPACE" "$job" >/dev/null 2>&1; then
+      return 0
+   fi
+   kubectl delete job -n "$NAMESPACE" "$job" --ignore-not-found --wait=false >/dev/null
+   if kubectl wait -n "$NAMESPACE" --for=delete "job/${job}" --timeout=120s >/dev/null 2>&1; then
+      return 0
+   fi
+   echo "[phase=$PHASE] WARNING: job/${job} did not disappear within 120s; forcing deletion" >&2
+   kubectl delete job -n "$NAMESPACE" "$job" \
+      --ignore-not-found --force --grace-period=0 --wait=false >/dev/null 2>&1 || true
+   kubectl wait -n "$NAMESPACE" --for=delete "job/${job}" --timeout=60s >/dev/null 2>&1 \
+      || { echo "[phase=$PHASE] ERROR: job/${job} is still present after forced deletion" >&2; exit 1; }
+}
+
+timeout_seconds() {
+   case "$1" in
+      *s) echo "${1%s}" ;;
+      *m) echo "$(( ${1%m} * 60 ))" ;;
+      *h) echo "$(( ${1%h} * 3600 ))" ;;
+      *) echo "$1" ;;
+   esac
+}
+
+wait_for_job_terminal_condition() {
+   local job="$1"
+   local timeout="$2"
+   local deadline=$(( $(date +%s) + $(timeout_seconds "$timeout") ))
+   local conditions
+   while true; do
+      conditions="$(kubectl get job -n "$NAMESPACE" "$job" \
+         -o jsonpath='{range .status.conditions[*]}{.type}={.status}{"\n"}{end}' 2>/dev/null || true)"
+      if grep -q '^Complete=True$' <<<"$conditions"; then
+         return 0
+      fi
+      if grep -q '^Failed=True$' <<<"$conditions"; then
+         return 1
+      fi
+      if (( $(date +%s) >= deadline )); then
+         return 124
+      fi
+      sleep 5
+   done
+}
+
 mkdir -p "$OUTPUT_DIR"
 phase_log="$OUTPUT_DIR/${RUN_ID}-${PHASE}.log"
 phase_summary="$OUTPUT_DIR/${RUN_ID}-${PHASE}-summaries.jsonl"
 
 echo "[phase=$PHASE] cleaning any previous instance of job/$JOB_NAME"
-kubectl delete job -n "$NAMESPACE" "$JOB_NAME" --ignore-not-found --wait=true
+delete_job_if_exists "$JOB_NAME"
 
 # Render a fresh Job locally before applying it. Job pod templates are
 # immutable after creation, so parallelism and env overrides must be present in
@@ -182,8 +228,7 @@ kubectl apply -f "$rendered_job" >/dev/null
 
 wait_failed="false"
 echo "[phase=$PHASE] waiting up to $TIMEOUT for completion"
-if ! kubectl wait -n "$NAMESPACE" --for=condition=complete \
-      "job/$JOB_NAME" --timeout="$TIMEOUT"; then
+if ! wait_for_job_terminal_condition "$JOB_NAME" "$TIMEOUT"; then
    wait_failed="true"
    echo "[phase=$PHASE] WARNING: job did not reach Complete; collecting failure context" >&2
 fi

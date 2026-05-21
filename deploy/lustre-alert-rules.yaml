@@ -91,3 +91,130 @@ groups:
         annotations:
           summary: "Azure Managed Lustre HSM backlog growing"
           description: "{{ $labels.filesystem_name }} MDT {{ $labels.mdtnum }} in {{ $labels.resource_group }} has more than 100 HSM in-flight requests for 10 minutes. Tune the threshold for your HSM workload. Current value: {{ printf \"%.2f\" $value }}."
+
+      - alert: AzureManagedLustreHsmBacklogCritical
+        expr: azure_managed_lustre_hsm_current_requests > 500
+        for: 10m
+        labels:
+          severity: critical
+          service: azure-managed-lustre
+        annotations:
+          summary: "Azure Managed Lustre HSM backlog critical"
+          description: "{{ $labels.filesystem_name }} MDT {{ $labels.mdtnum }} in {{ $labels.resource_group }} has more than 500 HSM in-flight requests for 10 minutes. Tune the threshold for your HSM workload. Current value: {{ printf \"%.2f\" $value }}."
+
+      # ---- OST safety boundary (used %) — doc § 9.1 ------------------
+      - alert: AzureManagedLustreOstUsedPercentWarn
+        expr: azure_managed_lustre_ost_bytes_used_percent > 75
+        for: 5m
+        labels:
+          severity: warning
+          service: azure-managed-lustre
+        annotations:
+          summary: "Azure Managed Lustre OST exceeds 75% used"
+          description: "{{ $labels.filesystem_name }} OST {{ $labels.ostnum }} in {{ $labels.resource_group }} is at {{ printf \"%.2f\" $value }}% used (warn at 75%, page at 80% per the production best-practices doc § 9.1)."
+
+      - alert: AzureManagedLustreOstUsedPercentCritical
+        expr: azure_managed_lustre_ost_bytes_used_percent > 80
+        for: 1m
+        labels:
+          severity: critical
+          service: azure-managed-lustre
+        annotations:
+          summary: "Azure Managed Lustre OST exceeds 80% used (safety boundary)"
+          description: "{{ $labels.filesystem_name }} OST {{ $labels.ostnum }} in {{ $labels.resource_group }} is at {{ printf \"%.2f\" $value }}% used. 80% is the named safety boundary for write-heavy workloads (best-practices doc § 9.1). Block new write-heavy phases until headroom is reclaimed."
+
+      # ---- MDT capacity (bytes + inodes) — doc § 2.2 -----------------
+      - alert: AzureManagedLustreMdtBytesUsedPercentWarn
+        expr: azure_managed_lustre_mdt_bytes_used_percent > 75
+        for: 5m
+        labels:
+          severity: warning
+          service: azure-managed-lustre
+        annotations:
+          summary: "Azure Managed Lustre MDT byte usage exceeds 75%"
+          description: "{{ $labels.filesystem_name }} MDT {{ $labels.mdtnum }} in {{ $labels.resource_group }} is at {{ printf \"%.2f\" $value }}% bytes used (warn at 75%, page at 90% per doc § 2.2)."
+
+      - alert: AzureManagedLustreMdtBytesUsedPercentCritical
+        expr: azure_managed_lustre_mdt_bytes_used_percent > 90
+        for: 1m
+        labels:
+          severity: critical
+          service: azure-managed-lustre
+        annotations:
+          summary: "Azure Managed Lustre MDT byte usage exceeds 90%"
+          description: "{{ $labels.filesystem_name }} MDT {{ $labels.mdtnum }} in {{ $labels.resource_group }} is at {{ printf \"%.2f\" $value }}% bytes used. MDT capacity exhaustion can block metadata operations."
+
+      - alert: AzureManagedLustreMdtInodeUsedPercentWarn
+        expr: azure_managed_lustre_mdt_files_used_percent > 70
+        for: 5m
+        labels:
+          severity: warning
+          service: azure-managed-lustre
+        annotations:
+          summary: "Azure Managed Lustre MDT inode usage exceeds 70%"
+          description: "{{ $labels.filesystem_name }} MDT {{ $labels.mdtnum }} in {{ $labels.resource_group }} is at {{ printf \"%.2f\" $value }}% inode used (warn at 70%, page at 85% per doc § 2.2). AI/HPC workloads frequently exhaust inodes before bytes."
+
+      - alert: AzureManagedLustreMdtInodeUsedPercentCritical
+        expr: azure_managed_lustre_mdt_files_used_percent > 85
+        for: 1m
+        labels:
+          severity: critical
+          service: azure-managed-lustre
+        annotations:
+          summary: "Azure Managed Lustre MDT inode usage exceeds 85%"
+          description: "{{ $labels.filesystem_name }} MDT {{ $labels.mdtnum }} in {{ $labels.resource_group }} is at {{ printf \"%.2f\" $value }}% inode used. Reaching 100% blocks all new file creation."
+
+      # ---- MDT latency — doc § 3.1 ------------------------------------
+      - alert: AzureManagedLustreMdtLatencyWarn
+        expr: azure_managed_lustre_mdt_client_latency_milliseconds > 100
+        for: 5m
+        labels:
+          severity: warning
+          service: azure-managed-lustre
+        annotations:
+          summary: "Azure Managed Lustre MDT latency above 100 ms"
+          description: "{{ $labels.filesystem_name }} MDT {{ $labels.mdtnum }} operation {{ $labels.operation }} sampled latency is {{ printf \"%.2f\" $value }} ms (warn >100 ms per doc § 3.1). This is the Azure Monitor MDTClientLatency mean, not a percentile."
+
+      - alert: AzureManagedLustreMdtLatencySerious
+        expr: azure_managed_lustre_mdt_client_latency_milliseconds > 500
+        for: 2m
+        labels:
+          severity: critical
+          service: azure-managed-lustre
+        annotations:
+          summary: "Azure Managed Lustre MDT latency above 500 ms (reconnect risk)"
+          description: "{{ $labels.filesystem_name }} MDT {{ $labels.mdtnum }} operation {{ $labels.operation }} sampled latency is {{ printf \"%.2f\" $value }} ms. >500 ms is the doc § 3.1 reconnect-risk band."
+
+      - alert: AzureManagedLustreMdtLatencyHang
+        expr: azure_managed_lustre_mdt_client_latency_milliseconds > 1000
+        for: 1m
+        labels:
+          severity: critical
+          service: azure-managed-lustre
+        annotations:
+          summary: "Azure Managed Lustre MDT latency above 1000 ms (hang risk)"
+          description: "{{ $labels.filesystem_name }} MDT {{ $labels.mdtnum }} operation {{ $labels.operation }} sampled latency is {{ printf \"%.2f\" $value }} ms. >1000 ms is the doc § 3.1 hang-risk band; expect D-state processes and PVC stalls."
+
+      # ---- MDT sample staleness (parallel to OST stale) — doc § 3.1 --
+      - alert: AzureManagedLustreMdtSampleStale
+        expr: time() - azure_managed_lustre_mdt_sample_timestamp_seconds > 300
+        for: 2m
+        labels:
+          severity: warning
+          service: azure-managed-lustre
+        annotations:
+          summary: "Azure Managed Lustre MDT metric sample is stale"
+          description: "{{ $labels.filesystem_name }} MDT {{ $labels.mdtnum }} has no fresh Azure Monitor MDT sample for more than 5 minutes. Check exporter logs and Azure Monitor health for this filesystem."
+
+      # ---- Exporter leader loss — collection paused -----------------
+      # Only meaningful when leader election is enabled (LEADER_ELECTION_ENABLED=true).
+      # When leader election is disabled azure_vmss_exporter_is_leader is always 1.
+      - alert: AzureManagedLustreExporterNoLeader
+        expr: sum(azure_vmss_exporter_is_leader) == 0
+        for: 2m
+        labels:
+          severity: critical
+          service: azure-managed-lustre
+        annotations:
+          summary: "vmss-metrics exporter has no leader (collection paused)"
+          description: "No vmss-metrics-exporter replica currently holds the leader-election lock. Azure Resource Graph and Managed Lustre collection are paused; dashboards will not refresh. Check the Deployment status, Lease object in the exporter namespace, and replica readiness."

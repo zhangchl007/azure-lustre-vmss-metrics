@@ -104,6 +104,22 @@ require_cmd() {
    command -v "$1" >/dev/null 2>&1 || fail "$1 not found on PATH"
 }
 
+delete_job_if_exists() {
+   local job="$1"
+   if ! kubectl get job -n "$NAMESPACE" "$job" >/dev/null 2>&1; then
+      return 0
+   fi
+   kubectl delete job -n "$NAMESPACE" "$job" --ignore-not-found --wait=false >/dev/null
+   if kubectl wait -n "$NAMESPACE" --for=delete "job/${job}" --timeout=120s >/dev/null 2>&1; then
+      return 0
+   fi
+   log "job/${job} did not disappear within 120s; forcing deletion"
+   kubectl delete job -n "$NAMESPACE" "$job" \
+      --ignore-not-found --force --grace-period=0 --wait=false >/dev/null 2>&1 || true
+   kubectl wait -n "$NAMESPACE" --for=delete "job/${job}" --timeout=60s >/dev/null 2>&1 \
+      || fail "job/${job} is still present after forced deletion"
+}
+
 while [[ $# -gt 0 ]]; do
    case "$1" in
       --run-base) RUN_BASE="$2"; shift 2 ;;
@@ -251,7 +267,7 @@ run_discovery() {
       return 0
    fi
    log "running discovery"
-   kubectl delete job -n "$NAMESPACE" av-dataset-discovery --ignore-not-found --wait=true
+   delete_job_if_exists av-dataset-discovery
    kubectl apply -f deploy/pressure-test/av-dataset-discovery-job.yaml >/dev/null
    kubectl wait -n "$NAMESPACE" --for=condition=complete job/av-dataset-discovery --timeout=900s
    kubectl logs -n "$NAMESPACE" job/av-dataset-discovery | tee "${OUTDIR}/discovery.json" >/dev/null
@@ -496,7 +512,7 @@ check_heavy_write_budget() {
 cleanup_run_id() {
    local run_id="$1"
    log "cleaning result tree for ${run_id}"
-   kubectl delete job -n "$NAMESPACE" av-output-cleanup --ignore-not-found --wait=true >/dev/null
+   delete_job_if_exists av-output-cleanup
    local rendered_job
    rendered_job="$(mktemp)"
    kubectl create --dry-run=client -f deploy/pressure-test/av-output-cleanup-job.yaml -o json > "$rendered_job"
