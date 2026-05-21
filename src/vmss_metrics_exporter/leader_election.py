@@ -178,6 +178,49 @@ def _build_real_election(
 def load_incluster_kube_config() -> None:
     """Load Kubernetes credentials from the in-cluster service account."""
 
+    from kubernetes import client
     from kubernetes import config as k8s_config
 
     k8s_config.load_incluster_config()
+    configuration = client.Configuration.get_default_copy()
+    _normalize_bearer_token_scheme(configuration)
+    _wrap_refresh_api_key_hook(configuration)
+    client.Configuration.set_default(configuration)
+
+
+def _normalize_bearer_token_scheme(configuration: object) -> None:
+    """Normalize in-cluster auth from ``bearer`` to ``Bearer``.
+
+    ``kubernetes`` 36.0.0 changed generated API calls to request auth setting
+    ``BearerToken`` while the in-cluster loader still populates the older
+    ``authorization`` key. It also refreshes tokens as lowercase ``bearer``.
+    Populate both keys with a canonical ``Bearer ...`` value so both old and new
+    clients send the service-account token.
+    """
+
+    api_key = getattr(configuration, "api_key", None)
+    if not isinstance(api_key, dict):
+        return
+    value = api_key.get("authorization") or api_key.get("BearerToken")
+    if not isinstance(value, str):
+        return
+    if value.startswith("bearer "):
+        value = "Bearer " + value[len("bearer ") :]
+    elif not value.startswith("Bearer "):
+        value = "Bearer " + value
+    api_key["authorization"] = value
+    api_key["BearerToken"] = value
+
+
+def _wrap_refresh_api_key_hook(configuration: object) -> None:
+    """Keep refreshed in-cluster tokens compatible with Kubernetes client 36."""
+
+    refresh_api_key_hook = getattr(configuration, "refresh_api_key_hook", None)
+    if not callable(refresh_api_key_hook):
+        return
+
+    def wrapped_refresh_api_key_hook(config: object) -> None:
+        refresh_api_key_hook(config)
+        _normalize_bearer_token_scheme(config)
+
+    setattr(configuration, "refresh_api_key_hook", wrapped_refresh_api_key_hook)

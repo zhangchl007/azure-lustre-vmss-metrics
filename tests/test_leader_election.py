@@ -11,6 +11,8 @@ from vmss_metrics_exporter.leader_election import (
     LeaderElectionConfig,
     LeaderElectionRunner,
     _build_real_election,
+    _normalize_bearer_token_scheme,
+    _wrap_refresh_api_key_hook,
 )
 
 
@@ -83,6 +85,42 @@ def test_build_real_election_wires_configmaplock_fields() -> None:
     assert lock.name == config.lock_name
     assert lock.namespace == config.lock_namespace
     assert lock.identity == config.identity
+
+
+def test_normalize_bearer_token_scheme_capitalizes_lowercase_bearer() -> None:
+    class Config:
+        api_key = {"authorization": "bearer token-value"}
+
+    _normalize_bearer_token_scheme(Config())
+
+    assert Config.api_key["authorization"] == "Bearer token-value"
+    assert Config.api_key["BearerToken"] == "Bearer token-value"
+
+
+def test_normalize_bearer_token_scheme_populates_kubernetes_36_key() -> None:
+    class Config:
+        api_key = {"authorization": "token-value"}
+
+    _normalize_bearer_token_scheme(Config())
+
+    assert Config.api_key["authorization"] == "Bearer token-value"
+    assert Config.api_key["BearerToken"] == "Bearer token-value"
+
+
+def test_refresh_api_key_hook_keeps_bearer_token_key_in_sync() -> None:
+    class Config:
+        api_key = {"authorization": "Bearer old-token", "BearerToken": "Bearer old-token"}
+
+        def refresh_api_key_hook(self, config: object) -> None:
+            self.api_key["authorization"] = "bearer refreshed-token"
+
+    config = Config()
+    _wrap_refresh_api_key_hook(config)
+
+    config.refresh_api_key_hook(config)
+
+    assert config.api_key["authorization"] == "Bearer refreshed-token"
+    assert config.api_key["BearerToken"] == "Bearer refreshed-token"
 
 
 def test_runner_invokes_callbacks_on_leadership_change() -> None:
