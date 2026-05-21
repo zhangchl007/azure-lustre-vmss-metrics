@@ -14,11 +14,13 @@ from prometheus_client.registry import CollectorRegistry
 from .models import (
     ManagedLustreCollectionResult,
     ManagedLustreFilesystem,
+    ManagedLustreFilesystemAggregateMetric,
     ManagedLustreMdtMetric,
     ManagedLustreMdtOperationMetric,
     ManagedLustreOstMetric,
     ManagedLustreOstOperationMetric,
     VmssCount,
+    build_lustre_filesystem_aggregate_metrics,
 )
 
 LOGGER = logging.getLogger(__name__)
@@ -118,6 +120,9 @@ class VmssMetricsExporter:
             tuple[str, str, str, str, str]
         ] = set()
         self._active_lustre_filesystem_capacity_labelsets: set[
+            tuple[str, str, str, str]
+        ] = set()
+        self._active_lustre_filesystem_aggregate_labelsets: set[
             tuple[str, str, str, str]
         ] = set()
 
@@ -386,6 +391,33 @@ class VmssMetricsExporter:
             LUSTRE_FILESYSTEM_CAPACITY_LABELS,
             registry=effective_registry,
         )
+        self.lustre_filesystem_connected_clients = Gauge(
+            "azure_managed_lustre_filesystem_connected_clients",
+            (
+                "Derived Azure Managed Lustre connected client count per filesystem. "
+                "Computed as the maximum MDTConnectedClients value for the filesystem."
+            ),
+            LUSTRE_FILESYSTEM_CAPACITY_LABELS,
+            registry=effective_registry,
+        )
+        self.lustre_metadata_amplification_ratio = Gauge(
+            "azure_managed_lustre_metadata_amplification_ratio",
+            (
+                "Derived Azure Managed Lustre metadata amplification ratio per filesystem: "
+                "sum(MDTClientOps) / max(sum(ClientReadOps + ClientWriteOps), 1)."
+            ),
+            LUSTRE_FILESYSTEM_CAPACITY_LABELS,
+            registry=effective_registry,
+        )
+        self.lustre_filesystem_sample_max_age = Gauge(
+            "azure_managed_lustre_filesystem_sample_max_age_seconds",
+            (
+                "Derived maximum Azure Monitor sample age in seconds across OST and MDT "
+                "series for each Azure Managed Lustre filesystem."
+            ),
+            LUSTRE_FILESYSTEM_CAPACITY_LABELS,
+            registry=effective_registry,
+        )
         self.lustre_ost_sample_count = Gauge(
             "azure_managed_lustre_ost_sample_count",
             (
@@ -474,6 +506,15 @@ class VmssMetricsExporter:
             result.operation_metrics,
             result.mdt_metrics,
             result.mdt_operation_metrics,
+            result.filesystem_aggregate_metrics
+            or build_lustre_filesystem_aggregate_metrics(
+                filesystems=result.filesystems,
+                metrics=result.metrics,
+                operation_metrics=result.operation_metrics,
+                mdt_metrics=result.mdt_metrics,
+                mdt_operation_metrics=result.mdt_operation_metrics,
+                now_seconds=time.time(),
+            ),
             remove_stale=remove_stale,
         ):
             LOGGER.info(
@@ -597,6 +638,9 @@ class VmssMetricsExporter:
                 self.lustre_mdt_operation_sample_timestamp,
                 self.lustre_filesystem_info,
                 self.lustre_filesystem_storage_capacity_tib,
+                self.lustre_filesystem_connected_clients,
+                self.lustre_metadata_amplification_ratio,
+                self.lustre_filesystem_sample_max_age,
             ):
                 gauge.clear()
             self._active_labelsets = set()
@@ -607,6 +651,7 @@ class VmssMetricsExporter:
             self._active_lustre_mdt_operation_labelsets = set()
             self._active_lustre_filesystem_info_labelsets = set()
             self._active_lustre_filesystem_capacity_labelsets = set()
+            self._active_lustre_filesystem_aggregate_labelsets = set()
             # Reset summary scalars so dashboards don't show stale totals on the follower.
             self.vmss_total.set(0)
             self.lustre_filesystem_total.set(0)
@@ -711,6 +756,7 @@ class VmssMetricsExporter:
         operation_metrics: Sequence[ManagedLustreOstOperationMetric],
         mdt_metrics: Sequence[ManagedLustreMdtMetric],
         mdt_operation_metrics: Sequence[ManagedLustreMdtOperationMetric],
+        filesystem_aggregate_metrics: Sequence[ManagedLustreFilesystemAggregateMetric],
         *,
         remove_stale: bool,
     ) -> bool:
@@ -725,6 +771,9 @@ class VmssMetricsExporter:
         new_mdt_labelsets = {metric.label_values for metric in mdt_metrics}
         new_mdt_operation_labelsets = {
             metric.label_values for metric in mdt_operation_metrics
+        }
+        new_filesystem_aggregate_labelsets = {
+            metric.label_values for metric in filesystem_aggregate_metrics
         }
         with self._metric_lock:
             if not self._can_write_metrics_locked():
@@ -742,6 +791,17 @@ class VmssMetricsExporter:
                 ):
                     with suppress(KeyError):
                         self.lustre_filesystem_storage_capacity_tib.remove(*stale)
+                for stale in (
+                    self._active_lustre_filesystem_aggregate_labelsets
+                    - new_filesystem_aggregate_labelsets
+                ):
+                    for gauge in (
+                        self.lustre_filesystem_connected_clients,
+                        self.lustre_metadata_amplification_ratio,
+                        self.lustre_filesystem_sample_max_age,
+                    ):
+                        with suppress(KeyError):
+                            gauge.remove(*stale)
                 for stale in self._active_lustre_ost_labelsets - new_labelsets:
                     for gauge in (
                         self.lustre_ost_bytes_available,
@@ -802,6 +862,23 @@ class VmssMetricsExporter:
                 self.lustre_filesystem_storage_capacity_tib.labels(
                     *filesystem.capacity_label_values
                 ).set(filesystem.storage_capacity_tib)
+
+            for metric in filesystem_aggregate_metrics:
+                self._set_or_remove_lustre_gauge(
+                    self.lustre_filesystem_connected_clients,
+                    metric.label_values,
+                    metric.connected_clients,
+                )
+                self._set_or_remove_lustre_gauge(
+                    self.lustre_metadata_amplification_ratio,
+                    metric.label_values,
+                    metric.metadata_amplification_ratio,
+                )
+                self._set_or_remove_lustre_gauge(
+                    self.lustre_filesystem_sample_max_age,
+                    metric.label_values,
+                    metric.sample_max_age_seconds,
+                )
 
             for metric in metrics:
                 self._set_or_remove_lustre_gauge(
@@ -963,6 +1040,9 @@ class VmssMetricsExporter:
                 self._active_lustre_filesystem_capacity_labelsets = (
                     new_filesystem_capacity_labelsets
                 )
+                self._active_lustre_filesystem_aggregate_labelsets = (
+                    new_filesystem_aggregate_labelsets
+                )
                 self._active_lustre_ost_labelsets = new_labelsets
                 self._active_lustre_ost_operation_labelsets = new_operation_labelsets
                 self._active_lustre_mdt_labelsets = new_mdt_labelsets
@@ -971,6 +1051,9 @@ class VmssMetricsExporter:
                 self._active_lustre_filesystem_info_labelsets |= new_filesystem_info_labelsets
                 self._active_lustre_filesystem_capacity_labelsets |= (
                     new_filesystem_capacity_labelsets
+                )
+                self._active_lustre_filesystem_aggregate_labelsets |= (
+                    new_filesystem_aggregate_labelsets
                 )
                 self._active_lustre_ost_labelsets |= new_labelsets
                 self._active_lustre_ost_operation_labelsets |= new_operation_labelsets

@@ -25,6 +25,7 @@ from vmss_metrics_exporter.models import (
     ManagedLustreMdtOperationMetric,
     ManagedLustreOstMetric,
     ManagedLustreOstOperationMetric,
+    build_lustre_filesystem_aggregate_metrics,
 )
 
 
@@ -662,6 +663,101 @@ def test_normalize_lustre_metrics_response_groups_ost_client_and_mdt_metrics() -
     assert mdt_operations[0].client_ops == 9.0
 
 
+def test_build_lustre_filesystem_aggregate_metrics() -> None:
+    filesystems = (
+        ManagedLustreFilesystem("sub-a", "rg-a", "lustre-a", "id-a", "westus3"),
+        ManagedLustreFilesystem("sub-a", "rg-a", "lustre-idle", "id-idle", "westus3"),
+    )
+
+    aggregate_metrics = build_lustre_filesystem_aggregate_metrics(
+        filesystems=filesystems,
+        metrics=(
+            ManagedLustreOstMetric(
+                "sub-a",
+                "rg-a",
+                "lustre-a",
+                "westus3",
+                "0",
+                client_read_ops=200.0,
+                client_write_ops=500.0,
+                sample_timestamp_seconds=900.0,
+            ),
+        ),
+        operation_metrics=(),
+        mdt_metrics=(
+            ManagedLustreMdtMetric(
+                "sub-a",
+                "rg-a",
+                "lustre-a",
+                "westus3",
+                "0",
+                connected_clients=7.0,
+                sample_timestamp_seconds=950.0,
+            ),
+            ManagedLustreMdtMetric(
+                "sub-a",
+                "rg-a",
+                "lustre-a",
+                "westus3",
+                "1",
+                connected_clients=13.0,
+            ),
+        ),
+        mdt_operation_metrics=(
+            ManagedLustreMdtOperationMetric(
+                "sub-a",
+                "rg-a",
+                "lustre-a",
+                "westus3",
+                "0",
+                "open",
+                client_ops=21.0,
+            ),
+        ),
+        now_seconds=1000.0,
+    )
+
+    assert len(aggregate_metrics) == 1
+    aggregate = aggregate_metrics[0]
+    assert aggregate.label_values == ("sub-a", "rg-a", "lustre-a", "westus3")
+    assert aggregate.connected_clients == 13.0
+    assert aggregate.metadata_amplification_ratio == 21.0 / 700.0
+    assert aggregate.sample_max_age_seconds == 100.0
+
+
+def test_build_lustre_filesystem_aggregate_metrics_clamps_zero_data_ops() -> None:
+    aggregate_metrics = build_lustre_filesystem_aggregate_metrics(
+        filesystems=(),
+        metrics=(
+            ManagedLustreOstMetric(
+                "sub-a",
+                "rg-a",
+                "lustre-a",
+                "westus3",
+                "all",
+                client_read_ops=0.0,
+                client_write_ops=0.0,
+            ),
+        ),
+        operation_metrics=(),
+        mdt_metrics=(),
+        mdt_operation_metrics=(
+            ManagedLustreMdtOperationMetric(
+                "sub-a",
+                "rg-a",
+                "lustre-a",
+                "westus3",
+                "all",
+                "all",
+                client_ops=9.0,
+            ),
+        ),
+        now_seconds=1000.0,
+    )
+
+    assert aggregate_metrics[0].metadata_amplification_ratio == 9.0
+
+
 def test_normalize_lustre_metrics_response_accepts_dimensionless_aggregate_series() -> None:
     filesystem = ManagedLustreFilesystem(
         "sub-a",
@@ -743,6 +839,9 @@ def test_collector_discovers_and_collects_metrics(monkeypatch: pytest.MonkeyPatc
     assert len(result.mdt_operation_metrics) == 1
     assert result.mdt_operation_metrics[0].operation == "open"
     assert result.mdt_operation_metrics[0].client_ops == 9.0
+    assert len(result.filesystem_aggregate_metrics) == 1
+    assert result.filesystem_aggregate_metrics[0].connected_clients == 7.0
+    assert result.filesystem_aggregate_metrics[0].metadata_amplification_ratio == 9.0 / 700.0
     expected_batches = [
         list(batch)
         for batch in _chunk_metric_names(

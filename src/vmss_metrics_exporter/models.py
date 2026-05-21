@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 
 
@@ -252,6 +253,142 @@ class ManagedLustreMdtOperationMetric:
 
 
 @dataclass(frozen=True, slots=True)
+class ManagedLustreFilesystemAggregateMetric:
+    """Derived per-filesystem Azure Managed Lustre metric sample."""
+
+    subscription_id: str
+    resource_group: str
+    filesystem_name: str
+    location: str
+    connected_clients: float | None = None
+    metadata_amplification_ratio: float | None = None
+    sample_max_age_seconds: float | None = None
+
+    @property
+    def label_values(self) -> tuple[str, str, str, str]:
+        """Return labels for per-filesystem derived Lustre metrics."""
+
+        return (
+            self.subscription_id,
+            self.resource_group,
+            self.filesystem_name,
+            self.location,
+        )
+
+
+def build_lustre_filesystem_aggregate_metrics(
+    *,
+    filesystems: Sequence[ManagedLustreFilesystem],
+    metrics: Sequence[ManagedLustreOstMetric],
+    operation_metrics: Sequence[ManagedLustreOstOperationMetric],
+    mdt_metrics: Sequence[ManagedLustreMdtMetric],
+    mdt_operation_metrics: Sequence[ManagedLustreMdtOperationMetric],
+    now_seconds: float,
+) -> tuple[ManagedLustreFilesystemAggregateMetric, ...]:
+    """Build derived per-filesystem metrics from normalized OST/MDT samples.
+
+    Filesystems without any Azure Monitor samples are intentionally omitted so
+    dashboards can distinguish discovered-but-idle resources via
+    ``azure_managed_lustre_filesystem_info`` while derived gauges represent only
+    filesystems with data backing the computed values.
+    """
+
+    keys = {filesystem.capacity_label_values for filesystem in filesystems}
+    keys.update(_filesystem_metric_key(metric) for metric in metrics)
+    keys.update(_filesystem_metric_key(metric) for metric in operation_metrics)
+    keys.update(_filesystem_metric_key(metric) for metric in mdt_metrics)
+    keys.update(_filesystem_metric_key(metric) for metric in mdt_operation_metrics)
+
+    results: list[ManagedLustreFilesystemAggregateMetric] = []
+    for key in sorted(keys):
+        filesystem_metrics = [
+            metric for metric in metrics if _filesystem_metric_key(metric) == key
+        ]
+        filesystem_operation_metrics = [
+            metric for metric in operation_metrics if _filesystem_metric_key(metric) == key
+        ]
+        filesystem_mdt_metrics = [
+            metric for metric in mdt_metrics if _filesystem_metric_key(metric) == key
+        ]
+        filesystem_mdt_operation_metrics = [
+            metric for metric in mdt_operation_metrics if _filesystem_metric_key(metric) == key
+        ]
+        if not any(
+            (
+                filesystem_metrics,
+                filesystem_operation_metrics,
+                filesystem_mdt_metrics,
+                filesystem_mdt_operation_metrics,
+            )
+        ):
+            continue
+
+        connected_clients = _max_optional(
+            metric.connected_clients for metric in filesystem_mdt_metrics
+        )
+        metadata_ops = sum(
+            metric.client_ops or 0.0 for metric in filesystem_mdt_operation_metrics
+        )
+        client_data_ops = sum(
+            (metric.client_read_ops or 0.0) + (metric.client_write_ops or 0.0)
+            for metric in filesystem_metrics
+        )
+        metadata_amplification_ratio = metadata_ops / max(client_data_ops, 1.0)
+        timestamps = [
+            timestamp
+            for timestamp in (
+                *(metric.sample_timestamp_seconds for metric in filesystem_metrics),
+                *(
+                    metric.sample_timestamp_seconds
+                    for metric in filesystem_operation_metrics
+                ),
+                *(metric.sample_timestamp_seconds for metric in filesystem_mdt_metrics),
+                *(
+                    metric.sample_timestamp_seconds
+                    for metric in filesystem_mdt_operation_metrics
+                ),
+            )
+            if timestamp is not None
+        ]
+        sample_max_age_seconds = (
+            max(0.0, now_seconds - min(timestamps)) if timestamps else None
+        )
+        results.append(
+            ManagedLustreFilesystemAggregateMetric(
+                subscription_id=key[0],
+                resource_group=key[1],
+                filesystem_name=key[2],
+                location=key[3],
+                connected_clients=connected_clients,
+                metadata_amplification_ratio=metadata_amplification_ratio,
+                sample_max_age_seconds=sample_max_age_seconds,
+            )
+        )
+    return tuple(results)
+
+
+def _filesystem_metric_key(
+    metric: ManagedLustreOstMetric
+    | ManagedLustreOstOperationMetric
+    | ManagedLustreMdtMetric
+    | ManagedLustreMdtOperationMetric,
+) -> tuple[str, str, str, str]:
+    return (
+        metric.subscription_id,
+        metric.resource_group,
+        metric.filesystem_name,
+        metric.location,
+    )
+
+
+def _max_optional(values: Iterable[float | None]) -> float | None:
+    numeric_values = [value for value in values if value is not None]
+    if not numeric_values:
+        return None
+    return max(numeric_values)
+
+
+@dataclass(frozen=True, slots=True)
 class ManagedLustreCollectionResult:
     """Result of one Azure Managed Lustre collection pass."""
 
@@ -262,3 +399,4 @@ class ManagedLustreCollectionResult:
     operation_metrics: tuple[ManagedLustreOstOperationMetric, ...] = ()
     mdt_metrics: tuple[ManagedLustreMdtMetric, ...] = ()
     mdt_operation_metrics: tuple[ManagedLustreMdtOperationMetric, ...] = ()
+    filesystem_aggregate_metrics: tuple[ManagedLustreFilesystemAggregateMetric, ...] = ()

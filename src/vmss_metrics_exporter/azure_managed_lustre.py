@@ -19,6 +19,7 @@ from .models import (
     ManagedLustreMdtOperationMetric,
     ManagedLustreOstMetric,
     ManagedLustreOstOperationMetric,
+    build_lustre_filesystem_aggregate_metrics,
 )
 
 LOGGER = logging.getLogger(__name__)
@@ -229,6 +230,14 @@ class AzureManagedLustreCollector:
                 item.operation,
             )
         )
+        filesystem_aggregate_metrics = build_lustre_filesystem_aggregate_metrics(
+            filesystems=filesystems,
+            metrics=metrics,
+            operation_metrics=operation_metrics,
+            mdt_metrics=mdt_metrics,
+            mdt_operation_metrics=mdt_operation_metrics,
+            now_seconds=time.time(),
+        )
         return ManagedLustreCollectionResult(
             metrics=tuple(metrics),
             filesystem_count=len(filesystems),
@@ -237,6 +246,7 @@ class AzureManagedLustreCollector:
             operation_metrics=tuple(operation_metrics),
             mdt_metrics=tuple(mdt_metrics),
             mdt_operation_metrics=tuple(mdt_operation_metrics),
+            filesystem_aggregate_metrics=filesystem_aggregate_metrics,
         )
 
     def discover_filesystems(self) -> list[ManagedLustreFilesystem]:

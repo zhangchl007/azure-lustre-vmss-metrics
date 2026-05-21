@@ -6,6 +6,7 @@ from vmss_metrics_exporter.collector import VmssMetricsExporter
 from vmss_metrics_exporter.models import (
     ManagedLustreCollectionResult,
     ManagedLustreFilesystem,
+    ManagedLustreFilesystemAggregateMetric,
     ManagedLustreMdtMetric,
     ManagedLustreMdtOperationMetric,
     ManagedLustreOstMetric,
@@ -164,6 +165,17 @@ def test_collect_once_sets_lustre_metrics_and_removes_stale_series() -> None:
                 client_ops=10.0,
             ),
         ),
+        filesystem_aggregate_metrics=(
+            ManagedLustreFilesystemAggregateMetric(
+                "sub-a",
+                "rg-a",
+                "lustre-a",
+                "westus3",
+                connected_clients=14.0,
+                metadata_amplification_ratio=10.0 / 720.0,
+                sample_max_age_seconds=45.0,
+            ),
+        ),
     )
     lustre_calls = iter([first_lustre, second_lustre])
     exporter = VmssMetricsExporter(
@@ -237,6 +249,22 @@ def test_collect_once_sets_lustre_metrics_and_removes_stale_series() -> None:
         f"{{{mdt_operation_labels}}} 1.0" in metrics
     )
     assert f"azure_managed_lustre_mdt_client_ops{{{mdt_operation_labels}}} 10.0" in metrics
+    filesystem_labels = (
+        'filesystem_name="lustre-a",location="westus3",resource_group="rg-a",'
+        'subscription_id="sub-a"'
+    )
+    assert (
+        f"azure_managed_lustre_filesystem_connected_clients"
+        f"{{{filesystem_labels}}} 14.0" in metrics
+    )
+    assert (
+        f"azure_managed_lustre_metadata_amplification_ratio"
+        f"{{{filesystem_labels}}} {10.0 / 720.0}" in metrics
+    )
+    assert (
+        f"azure_managed_lustre_filesystem_sample_max_age_seconds"
+        f"{{{filesystem_labels}}} 45.0" in metrics
+    )
     assert "lustre-b" not in metrics
     assert "azure_managed_lustre_filesystem_total 1.0" in metrics
     assert "azure_managed_lustre_ost_sample_count 1.0" in metrics
