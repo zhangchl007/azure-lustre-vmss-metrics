@@ -415,13 +415,17 @@ run_phase() {
    shift 4
    log "running phase=${phase} run_id=${run_id} parallelism=${parallelism}"
    RUN_IDS+=("$run_id")
-   scripts/av_pressure_phase.sh \
-      --phase "$phase" \
-      --parallelism "$parallelism" \
-      --run-id "$run_id" \
-      --output-dir "$OUTDIR" \
-      --timeout "$PHASE_TIMEOUT" \
-      "$@"
+   local phase_args=(
+      --phase "$phase"
+      --parallelism "$parallelism"
+      --run-id "$run_id"
+      --output-dir "$OUTDIR"
+      --timeout "$PHASE_TIMEOUT"
+   )
+   if [[ "$allow_partial" == "true" ]]; then
+      phase_args+=(--allow-partial)
+   fi
+   scripts/av_pressure_phase.sh "${phase_args[@]}" "$@"
    validate_summary "$phase" "$run_id" "$parallelism" "$allow_partial"
    check_immutability "$phase"
 }

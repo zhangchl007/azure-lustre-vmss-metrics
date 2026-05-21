@@ -89,6 +89,8 @@ The exporter discovers resources with Azure Resource Graph, reads Managed Lustre
 | `azure_managed_lustre_mdt_client_ops` | MDT client operations. |
 | `azure_managed_lustre_hsm_action_errors` | HSM action errors (`HSMActionErrors`). |
 | `azure_managed_lustre_hsm_current_requests` | HSM in-flight requests (`HSMCurrentRequests`). |
+| `azure_managed_lustre_ost_connected_clients` | OST connected client count / exports (`OSTConnectedClients`). Approximates clients seen by each OST; per-OST variance flags failover or eviction. |
+| `azure_managed_lustre_mdt_connected_clients` | MDT connected client count / exports (`MDTConnectedClients`). Each mounted client opens one export per MDT, so `max by (filesystem_name)` of this metric approximates the per-filesystem client count. |
 | `azure_managed_lustre_last_success_timestamp_seconds` | Last successful Managed Lustre collection timestamp. |
 | `azure_managed_lustre_collection_duration_seconds` | Latest Managed Lustre collection duration. |
 | `azure_managed_lustre_collection_errors_total` | Managed Lustre collection error counter. |

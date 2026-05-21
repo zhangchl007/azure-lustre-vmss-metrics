@@ -40,9 +40,14 @@ Resources
 """.strip()
 
 LUSTRE_METRIC_NAMESPACE = "Microsoft.StorageCache/amlFilesystems"
+# Azure Monitor's `query_resource` endpoint accepts at most 20 metric names per
+# request. The exporter chunks `LUSTRE_METRICS` into batches of this size so we
+# can keep growing the metric set without hitting the limit.
+AZURE_MONITOR_METRIC_NAMES_PER_REQUEST = 20
 OST_BYTES_AVAILABLE_METRIC = "OSTBytesAvailable"
 OST_BYTES_USED_METRIC = "OSTBytesUsed"
 OST_BYTES_TOTAL_METRIC = "OSTBytesTotal"
+OST_CONNECTED_CLIENTS_METRIC = "OSTConnectedClients"
 OST_CLIENT_LATENCY_METRIC = "OSTClientLatency"
 OST_CLIENT_OPS_METRIC = "OSTClientOps"
 CLIENT_READ_OPS_METRIC = "ClientReadOps"
@@ -52,6 +57,7 @@ CLIENT_WRITE_THROUGHPUT_METRIC = "ClientWriteThroughput"
 MDT_BYTES_AVAILABLE_METRIC = "MDTBytesAvailable"
 MDT_BYTES_USED_METRIC = "MDTBytesUsed"
 MDT_BYTES_TOTAL_METRIC = "MDTBytesTotal"
+MDT_CONNECTED_CLIENTS_METRIC = "MDTConnectedClients"
 MDT_FILES_FREE_METRIC = "MDTFilesFree"
 MDT_FILES_USED_METRIC = "MDTFilesUsed"
 MDT_FILES_TOTAL_METRIC = "MDTFilesTotal"
@@ -68,6 +74,7 @@ OST_SIMPLE_METRICS = (
     OST_BYTES_AVAILABLE_METRIC,
     OST_BYTES_USED_METRIC,
     OST_BYTES_TOTAL_METRIC,
+    OST_CONNECTED_CLIENTS_METRIC,
     CLIENT_READ_OPS_METRIC,
     CLIENT_READ_THROUGHPUT_METRIC,
     CLIENT_WRITE_OPS_METRIC,
@@ -82,6 +89,7 @@ MDT_SIMPLE_METRICS = (
     MDT_BYTES_AVAILABLE_METRIC,
     MDT_BYTES_USED_METRIC,
     MDT_BYTES_TOTAL_METRIC,
+    MDT_CONNECTED_CLIENTS_METRIC,
     MDT_FILES_FREE_METRIC,
     MDT_FILES_USED_METRIC,
     MDT_FILES_TOTAL_METRIC,
@@ -268,17 +276,25 @@ class AzureManagedLustreCollector:
         list[ManagedLustreMdtMetric],
         list[ManagedLustreMdtOperationMetric],
     ]:
-        response = self._execute_with_retry(
-            lambda: self._metrics_client.query_resource(
-                filesystem.resource_id,
-                list(LUSTRE_METRICS),
-                metric_namespace=LUSTRE_METRIC_NAMESPACE,
-                timespan=self._lookback,
-                granularity=self._granularity,
-                aggregations=["Average"],
+        # Azure Monitor caps each query_resource call at 20 metric names, so we
+        # split LUSTRE_METRICS into batches and merge the per-batch responses
+        # into a single synthetic response for normalization.
+        merged_metrics: list[Any] = []
+        for batch in _chunk_metric_names(
+            LUSTRE_METRICS, AZURE_MONITOR_METRIC_NAMES_PER_REQUEST
+        ):
+            response = self._execute_with_retry(
+                lambda batch=batch: self._metrics_client.query_resource(
+                    filesystem.resource_id,
+                    list(batch),
+                    metric_namespace=LUSTRE_METRIC_NAMESPACE,
+                    timespan=self._lookback,
+                    granularity=self._granularity,
+                    aggregations=["Average"],
+                )
             )
-        )
-        return normalize_lustre_metrics_response(filesystem, response)
+            merged_metrics.extend(_iter_sequence_attr(response, "metrics"))
+        return normalize_lustre_metrics_response(filesystem, {"metrics": merged_metrics})
 
     def _execute_with_retry(self, operation: Any) -> object:
         attempt = 0
@@ -403,14 +419,18 @@ def normalize_lustre_metrics_response(
             if latest is None:
                 continue
             value, sample_timestamp_seconds = latest
+            ostnum: str | None = None
+            mdtnum: str | None = None
             if metric_name in OST_METRICS:
                 ostnum = _dimension_value_or_aggregate(time_series, "ostnum")
                 if not ostnum:
                     continue
-            if metric_name in MDT_METRICS:
+            elif metric_name in MDT_METRICS:
                 mdtnum = _dimension_value_or_aggregate(time_series, "mdtnum")
                 if not mdtnum:
                     continue
+            else:
+                continue
 
             if metric_name in OST_OPERATION_METRICS:
                 operation = _dimension_value(time_series, "operation") or AGGREGATE_DIMENSION_VALUE
@@ -465,6 +485,7 @@ def normalize_lustre_metrics_response(
                 client_write_throughput_bytes_per_second=values.get(
                     CLIENT_WRITE_THROUGHPUT_METRIC
                 ),
+                connected_clients=values.get(OST_CONNECTED_CLIENTS_METRIC),
                 sample_timestamp_seconds=ost_timestamps.get(ostnum),
             )
         )
@@ -502,6 +523,7 @@ def normalize_lustre_metrics_response(
                 files_total=values.get(MDT_FILES_TOTAL_METRIC),
                 hsm_action_errors=values.get(HSM_ACTION_ERRORS_METRIC),
                 hsm_current_requests=values.get(HSM_CURRENT_REQUESTS_METRIC),
+                connected_clients=values.get(MDT_CONNECTED_CLIENTS_METRIC),
                 sample_timestamp_seconds=mdt_timestamps.get(mdtnum),
             )
         )
@@ -544,6 +566,7 @@ def summarize_lustre_metrics(result: ManagedLustreCollectionResult) -> str:
     lines = [
         "subscription_id\tresource_group\tfilesystem_name\tlocation\tostnum\t"
         "bytes_available\tbytes_used\tbytes_total\tbytes_available_percent\t"
+        "connected_clients\t"
         "client_read_ops\tclient_read_throughput_bytes_per_second\tclient_write_ops\t"
         "client_write_throughput_bytes_per_second"
     ]
@@ -556,10 +579,11 @@ def summarize_lustre_metrics(result: ManagedLustreCollectionResult) -> str:
                     item.filesystem_name,
                     item.location,
                     item.ostnum,
-                    str(item.bytes_available),
+                    _optional_float_str(item.bytes_available),
                     _optional_float_str(item.bytes_used),
                     _optional_float_str(item.bytes_total),
                     _optional_float_str(item.bytes_available_percent),
+                    _optional_float_str(item.connected_clients),
                     _optional_float_str(item.client_read_ops),
                     _optional_float_str(item.client_read_throughput_bytes_per_second),
                     _optional_float_str(item.client_write_ops),
@@ -593,6 +617,7 @@ def summarize_lustre_metrics(result: ManagedLustreCollectionResult) -> str:
         lines.append(
             "subscription_id\tresource_group\tfilesystem_name\tlocation\tmdtnum\t"
             "bytes_available\tbytes_used\tbytes_total\tbytes_available_percent\t"
+            "connected_clients\t"
             "files_free\tfiles_used\tfiles_total\tfiles_free_percent\t"
             "hsm_action_errors\thsm_current_requests"
         )
@@ -609,6 +634,7 @@ def summarize_lustre_metrics(result: ManagedLustreCollectionResult) -> str:
                         _optional_float_str(item.bytes_used),
                         _optional_float_str(item.bytes_total),
                         _optional_float_str(item.bytes_available_percent),
+                        _optional_float_str(item.connected_clients),
                         _optional_float_str(item.files_free),
                         _optional_float_str(item.files_used),
                         _optional_float_str(item.files_total),
@@ -658,6 +684,22 @@ def _optional_float_str(value: float | None) -> str:
     if value is None:
         return ""
     return str(value)
+
+
+def _chunk_metric_names(
+    metric_names: Sequence[str], chunk_size: int
+) -> list[tuple[str, ...]]:
+    """Split a metric-name list into chunks no larger than ``chunk_size``.
+
+    Azure Monitor's ``query_resource`` endpoint accepts at most 20 metric names
+    per call. The collector batches ``LUSTRE_METRICS`` through this helper and
+    merges the resulting per-batch responses.
+    """
+
+    if chunk_size <= 0:
+        raise ValueError("chunk_size must be positive")
+    items = list(metric_names)
+    return [tuple(items[i : i + chunk_size]) for i in range(0, len(items), chunk_size)]
 
 
 def _is_retryable_exception(exc: Exception) -> bool:

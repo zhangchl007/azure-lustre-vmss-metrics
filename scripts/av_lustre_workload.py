@@ -315,6 +315,21 @@ def assert_disjoint_roots(dataset_root: Path, result_root: Path) -> tuple[Path, 
     return dataset_resolved, result_resolved
 
 
+def validate_run_id_segment(run_id: str | None) -> str:
+    """Return a sanitized run id after asserting it is one path segment."""
+    value = (run_id or "").strip()
+    if not value or value in (".", "..") or "/" in value or "\\" in value:
+        raise ValueError("run-id must be a single path segment")
+    return value
+
+
+def stable_seed(value: str) -> int:
+    """Return a process-independent integer seed for deterministic shuffles."""
+
+    digest = hashlib.sha256(value.encode("utf-8")).digest()
+    return int.from_bytes(digest[:8], "big")
+
+
 def resolve_walk_root(dataset_root: Path, subpath: str | None) -> Path:
     """Compute the effective walk root, validating ``subpath`` first.
 
@@ -814,12 +829,13 @@ def run_read(args: argparse.Namespace, *, write_outputs: bool) -> WorkloadSummar
     if write_outputs:
         if not args.result_root or not args.run_id:
             raise ValueError("result-root and run-id are required for write modes")
+        run_id = validate_run_id_segment(args.run_id)
         result_root_resolved = Path(args.result_root).resolve()
-        run_dir = (result_root_resolved / args.run_id).resolve()
+        run_dir = (result_root_resolved / run_id).resolve()
         try:
             run_dir.relative_to(result_root_resolved)
         except ValueError as exc:
-            raise ValueError("run-id must not contain path separators") from exc
+            raise ValueError("run-id must be a single path segment") from exc
         pod_output_dir = (run_dir / args.pod_name).resolve()
         ensure_within(run_dir, pod_output_dir)
         pod_output_dir.mkdir(parents=True, exist_ok=True)
@@ -842,7 +858,11 @@ def run_read(args: argparse.Namespace, *, write_outputs: bool) -> WorkloadSummar
         # Top-K largest files across the whole dataset (shared by all pods).
         hotset = sorted(entries, key=lambda e: e.size, reverse=True)[: args.hotset_count]
 
-    base_seed = args.seed if args.seed is not None else hash((args.run_id, args.pod_index))
+    base_seed = (
+        args.seed
+        if args.seed is not None
+        else stable_seed(f"run={args.run_id or ''};pod={args.pod_index}")
+    )
     epochs = max(1, args.epochs)
     warmup_deadline_seconds = max(0.0, float(args.warmup_seconds))
     read_pattern = args.read_pattern
@@ -951,7 +971,7 @@ def run_read(args: argparse.Namespace, *, write_outputs: bool) -> WorkloadSummar
             _print_progress(summary, now - started)
 
     for epoch in range(epochs):
-        epoch_seed = hash(f"{base_seed}-epoch-{epoch}")
+        epoch_seed = stable_seed(f"base={base_seed};epoch={epoch}")
         selected = select_files(
             shard,
             files_per_pod=args.files_per_pod,
@@ -1014,14 +1034,15 @@ def run_read(args: argparse.Namespace, *, write_outputs: bool) -> WorkloadSummar
 def run_verify(args: argparse.Namespace) -> WorkloadSummary:
     if not args.result_root or not args.run_id:
         raise ValueError("result-root and run-id are required for verify-output")
+    run_id = validate_run_id_segment(args.run_id)
     if args.dataset_root:
         assert_disjoint_roots(Path(args.dataset_root), Path(args.result_root))
     result_root_resolved = Path(args.result_root).resolve()
-    run_dir = (result_root_resolved / args.run_id).resolve()
+    run_dir = (result_root_resolved / run_id).resolve()
     try:
         run_dir.relative_to(result_root_resolved)
     except ValueError as exc:
-        raise ValueError("run-id must not contain path separators") from exc
+        raise ValueError("run-id must be a single path segment") from exc
 
     summary = WorkloadSummary(
         pod_name=args.pod_name,

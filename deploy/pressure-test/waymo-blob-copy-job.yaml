@@ -109,7 +109,7 @@ spec:
               value: INFO
           command:
             - /bin/sh
-            - -exc
+            - -ec
             - |
               echo "=== $(date -u) verifying GCS credentials are mounted ==="
               test -s "${GCS_TOKEN_PATH}" \

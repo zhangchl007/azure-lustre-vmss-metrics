@@ -98,6 +98,7 @@ class ManagedLustreOstMetric:
     client_read_throughput_bytes_per_second: float | None = None
     client_write_ops: float | None = None
     client_write_throughput_bytes_per_second: float | None = None
+    connected_clients: float | None = None
     sample_timestamp_seconds: float | None = None
 
     @property
@@ -174,6 +175,7 @@ class ManagedLustreMdtMetric:
     files_total: float | None = None
     hsm_action_errors: float | None = None
     hsm_current_requests: float | None = None
+    connected_clients: float | None = None
     sample_timestamp_seconds: float | None = None
 
     @property

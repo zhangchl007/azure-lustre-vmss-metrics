@@ -6,8 +6,10 @@ import pytest
 
 from vmss_metrics_exporter.azure_managed_lustre import (
     AMLFS_FILESYSTEMS_QUERY,
+    AZURE_MONITOR_METRIC_NAMES_PER_REQUEST,
     LUSTRE_METRICS,
     AzureManagedLustreCollector,
+    _chunk_metric_names,
     normalize_filesystem_row,
     normalize_lustre_metrics_response,
     normalize_ost_bytes_available_response,
@@ -393,8 +395,17 @@ def test_amlfs_query_discovers_all_filesystems() -> None:
 
 
 def test_lustre_metric_query_stays_within_azure_monitor_limit() -> None:
-    # Azure Monitor accepts at most 20 metric names per query_resource request.
-    assert len(LUSTRE_METRICS) <= 20
+    # Azure Monitor accepts at most 20 metric names per query_resource request,
+    # so the collector must chunk LUSTRE_METRICS into batches no larger than
+    # AZURE_MONITOR_METRIC_NAMES_PER_REQUEST. Validate the chunking constant
+    # honors the documented Azure Monitor cap and that every produced batch is
+    # within the limit.
+    assert AZURE_MONITOR_METRIC_NAMES_PER_REQUEST <= 20
+    batches = _chunk_metric_names(LUSTRE_METRICS, AZURE_MONITOR_METRIC_NAMES_PER_REQUEST)
+    assert batches, "expected at least one metric batch"
+    assert all(len(batch) <= AZURE_MONITOR_METRIC_NAMES_PER_REQUEST for batch in batches)
+    flattened = tuple(name for batch in batches for name in batch)
+    assert flattened == tuple(LUSTRE_METRICS)
 
 
 def test_normalize_filesystem_row() -> None:
@@ -632,12 +643,14 @@ def test_normalize_lustre_metrics_response_groups_ost_client_and_mdt_metrics() -
     assert ost_metrics[0].client_read_throughput_bytes_per_second == 300.0
     assert ost_metrics[0].client_write_ops == 500.0
     assert ost_metrics[0].client_write_throughput_bytes_per_second == 600.0
+    assert ost_metrics[0].connected_clients == 5.0
     assert len(mdt_metrics) == 1
     assert mdt_metrics[0].label_values == ("sub-a", "rg-a", "lustre-a", "westus3", "0")
     assert mdt_metrics[0].bytes_available == 700.0
     assert mdt_metrics[0].bytes_used == 300.0
     assert mdt_metrics[0].bytes_total == 1000.0
     assert mdt_metrics[0].bytes_available_percent == 70.0
+    assert mdt_metrics[0].connected_clients == 7.0
     assert mdt_metrics[0].files_free == 80.0
     assert mdt_metrics[0].files_used == 20.0
     assert mdt_metrics[0].files_total == 100.0
@@ -716,6 +729,7 @@ def test_collector_discovers_and_collects_metrics(monkeypatch: pytest.MonkeyPatc
     assert result.metrics[0].bytes_total == 1000.0
     assert result.metrics[0].client_read_ops == 200.0
     assert result.metrics[0].client_write_throughput_bytes_per_second == 600.0
+    assert result.metrics[0].connected_clients == 5.0
     assert len(result.operation_metrics) == 1
     assert result.operation_metrics[0].operation == "read"
     assert result.operation_metrics[0].client_latency_milliseconds == 12.5
@@ -725,10 +739,17 @@ def test_collector_discovers_and_collects_metrics(monkeypatch: pytest.MonkeyPatc
     assert result.mdt_metrics[0].files_total == 100.0
     assert result.mdt_metrics[0].hsm_action_errors == 2.0
     assert result.mdt_metrics[0].hsm_current_requests == 17.0
+    assert result.mdt_metrics[0].connected_clients == 7.0
     assert len(result.mdt_operation_metrics) == 1
     assert result.mdt_operation_metrics[0].operation == "open"
     assert result.mdt_operation_metrics[0].client_ops == 9.0
-    assert metrics_client.metric_names == [list(LUSTRE_METRICS)]
+    expected_batches = [
+        list(batch)
+        for batch in _chunk_metric_names(
+            LUSTRE_METRICS, AZURE_MONITOR_METRIC_NAMES_PER_REQUEST
+        )
+    ]
+    assert metrics_client.metric_names == expected_batches
 
 
 def test_collector_isolates_per_filesystem_metric_failures(

@@ -27,6 +27,9 @@
 #   descend into under the walk root).
 # --subpath sets SUBPATH (relative path under DATASET_ROOT to use as the walk
 #   root). Must not contain '..' and must not start with '/'.
+# --allow-partial lets the script return success after a failed Job only when
+#   at least one per-pod summary was collected. Use this for intentional
+#   failure-analysis phases such as strict SLO gates.
 
 set -euo pipefail
 
@@ -53,6 +56,7 @@ FILES_PER_POD=""
 MAX_BYTES_PER_POD=""
 VERIFY_READS=""
 OUTPUT_DIR="reports"
+ALLOW_PARTIAL="false"
 
 usage() {
    grep '^# ' "$0" | sed 's/^# \{0,1\}//'
@@ -80,6 +84,7 @@ while [[ $# -gt 0 ]]; do
       --no-verify-reads) VERIFY_READS="false"; shift ;;
       --output-dir) OUTPUT_DIR="$2"; shift 2 ;;
       --timeout) TIMEOUT="$2"; shift 2 ;;
+      --allow-partial) ALLOW_PARTIAL="true"; shift ;;
       -h|--help) usage; exit 0 ;;
       *) echo "unknown argument: $1" >&2; usage >&2; exit 64 ;;
    esac
@@ -175,16 +180,21 @@ PY
 echo "[phase=$PHASE] applying rendered job manifest"
 kubectl apply -f "$rendered_job" >/dev/null
 
+wait_failed="false"
 echo "[phase=$PHASE] waiting up to $TIMEOUT for completion"
 if ! kubectl wait -n "$NAMESPACE" --for=condition=complete \
       "job/$JOB_NAME" --timeout="$TIMEOUT"; then
+   wait_failed="true"
    echo "[phase=$PHASE] WARNING: job did not reach Complete; collecting failure context" >&2
 fi
 
 echo "[phase=$PHASE] capturing pod logs to $phase_log"
-kubectl logs -n "$NAMESPACE" \
-   -l app.kubernetes.io/name=av-lustre-workload,app.kubernetes.io/component=validation \
-   --tail=-1 --prefix=true > "$phase_log"
+if ! kubectl logs -n "$NAMESPACE" \
+      -l app.kubernetes.io/name=av-lustre-workload,app.kubernetes.io/component=validation \
+      --tail=-1 --prefix=true > "$phase_log"; then
+   echo "[phase=$PHASE] WARNING: failed to capture pod logs" >&2
+   : > "$phase_log"
+fi
 
 echo "[phase=$PHASE] extracting per-pod summary JSON objects to $phase_summary"
 python3 - "$phase_log" "$phase_summary" <<'PY'
@@ -224,5 +234,21 @@ with dst.open("a", encoding="utf-8") as handle:
         i = end
 print(f"summaries={count} -> {dst}")
 PY
+
+summary_count="$(wc -l < "$phase_summary" | tr -d ' ')"
+if [[ "$summary_count" == "0" ]]; then
+   echo "[phase=$PHASE] ERROR: no per-pod summaries extracted from $phase_log" >&2
+   exit 1
+fi
+
+if [[ "$wait_failed" == "true" && "$ALLOW_PARTIAL" != "true" ]]; then
+   echo "[phase=$PHASE] ERROR: job did not complete; summaries collected at $phase_summary" >&2
+   echo "[phase=$PHASE]        re-run with --allow-partial only for expected failure-analysis phases" >&2
+   exit 1
+fi
+
+if [[ "$wait_failed" == "true" ]]; then
+   echo "[phase=$PHASE] WARNING: job failed but --allow-partial was set; collected $summary_count summaries" >&2
+fi
 
 echo "[phase=$PHASE] done"

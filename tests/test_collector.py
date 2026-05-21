@@ -68,6 +68,7 @@ def test_collect_once_sets_lustre_metrics_and_removes_stale_series() -> None:
                 client_read_throughput_bytes_per_second=300.0,
                 client_write_ops=500.0,
                 client_write_throughput_bytes_per_second=600.0,
+                connected_clients=11.0,
             ),
             ManagedLustreOstMetric(
                 "sub-a", "rg-a", "lustre-b", "westus3", "0", 200.0,
@@ -98,6 +99,7 @@ def test_collect_once_sets_lustre_metrics_and_removes_stale_series() -> None:
                 files_total=100.0,
                 hsm_action_errors=2.0,
                 hsm_current_requests=17.0,
+                connected_clients=13.0,
             ),
             ManagedLustreMdtMetric(
                 "sub-a", "rg-a", "lustre-b", "westus3", "0",
@@ -130,6 +132,7 @@ def test_collect_once_sets_lustre_metrics_and_removes_stale_series() -> None:
                 client_read_throughput_bytes_per_second=310.0,
                 client_write_ops=510.0,
                 client_write_throughput_bytes_per_second=610.0,
+                connected_clients=12.0,
             ),
         ),
         filesystem_count=1,
@@ -151,6 +154,7 @@ def test_collect_once_sets_lustre_metrics_and_removes_stale_series() -> None:
                 files_total=100.0,
                 hsm_action_errors=1.0,
                 hsm_current_requests=12.0,
+                connected_clients=14.0,
             ),
         ),
         mdt_operation_metrics=(
@@ -184,7 +188,7 @@ def test_collect_once_sets_lustre_metrics_and_removes_stale_series() -> None:
         in metrics
     )
     assert f"azure_managed_lustre_ost_bytes_used_percent{{{expected_labels}}} 85.0" in metrics
-    assert "azure_managed_lustre_ost_connected_clients" not in metrics
+    assert f"azure_managed_lustre_ost_connected_clients{{{expected_labels}}} 12.0" in metrics
     assert "azure_managed_lustre_ost_files_free" not in metrics
     assert "azure_managed_lustre_client_read_latency_total_milliseconds" not in metrics
     assert f"azure_managed_lustre_client_read_ops{{{expected_labels}}} 210.0" in metrics
@@ -216,7 +220,7 @@ def test_collect_once_sets_lustre_metrics_and_removes_stale_series() -> None:
     assert f"azure_managed_lustre_mdt_bytes_total{{{mdt_labels}}} 1000.0" in metrics
     assert f"azure_managed_lustre_mdt_bytes_available_percent{{{mdt_labels}}} 75.0" in metrics
     assert f"azure_managed_lustre_mdt_bytes_used_percent{{{mdt_labels}}} 25.0" in metrics
-    assert "azure_managed_lustre_mdt_connected_clients" not in metrics
+    assert f"azure_managed_lustre_mdt_connected_clients{{{mdt_labels}}} 14.0" in metrics
     assert f"azure_managed_lustre_mdt_files_free{{{mdt_labels}}} 85.0" in metrics
     assert f"azure_managed_lustre_mdt_files_used{{{mdt_labels}}} 15.0" in metrics
     assert f"azure_managed_lustre_mdt_files_total{{{mdt_labels}}} 100.0" in metrics
@@ -235,7 +239,7 @@ def test_collect_once_sets_lustre_metrics_and_removes_stale_series() -> None:
     assert f"azure_managed_lustre_mdt_client_ops{{{mdt_operation_labels}}} 10.0" in metrics
     assert "lustre-b" not in metrics
     assert "azure_managed_lustre_filesystem_total 1.0" in metrics
-    assert "azure_managed_lustre_ost_total 1.0" in metrics
+    assert "azure_managed_lustre_ost_sample_count 1.0" in metrics
     assert "azure_managed_lustre_last_success_timestamp_seconds" in metrics
     assert "azure_managed_lustre_ost_sample_timestamp_seconds" in metrics
 
@@ -316,7 +320,7 @@ def test_lustre_filesystem_inventory_is_exposed_without_samples() -> None:
         f"{{{capacity_labels}}} 8.0" in metrics
     )
     assert "azure_managed_lustre_filesystem_total 1.0" in metrics
-    assert "azure_managed_lustre_ost_total 0.0" in metrics
+    assert "azure_managed_lustre_ost_sample_count 0.0" in metrics
     assert "azure_managed_lustre_ost_bytes_available{" not in metrics
 
 
@@ -514,7 +518,7 @@ def test_lustre_update_is_skipped_when_leadership_is_lost_mid_collection() -> No
     assert "lustre-a" not in metrics
     assert "azure_vmss_exporter_is_leader 0.0" in metrics
     assert "azure_managed_lustre_filesystem_total 0.0" in metrics
-    assert "azure_managed_lustre_ost_total 0.0" in metrics
+    assert "azure_managed_lustre_ost_sample_count 0.0" in metrics
     assert "azure_managed_lustre_last_success_timestamp_seconds 0.0" in metrics
 
 

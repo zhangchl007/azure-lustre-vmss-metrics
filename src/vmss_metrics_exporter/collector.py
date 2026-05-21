@@ -223,6 +223,17 @@ class VmssMetricsExporter:
             LUSTRE_OST_LABELS,
             registry=effective_registry,
         )
+        self.lustre_ost_connected_clients = Gauge(
+            "azure_managed_lustre_ost_connected_clients",
+            (
+                "Azure Managed Lustre OST connected client count (exports) from Azure "
+                "Monitor OSTConnectedClients. Approximates the number of mounted Lustre "
+                "clients seen by each OST; per-OST variance can indicate failover or "
+                "eviction in progress."
+            ),
+            LUSTRE_OST_LABELS,
+            registry=effective_registry,
+        )
         self.lustre_ost_sample_timestamp = Gauge(
             "azure_managed_lustre_ost_sample_timestamp_seconds",
             "Unix timestamp of the Azure Monitor sample backing each OST metric series.",
@@ -326,6 +337,17 @@ class VmssMetricsExporter:
             LUSTRE_MDT_LABELS,
             registry=effective_registry,
         )
+        self.lustre_mdt_connected_clients = Gauge(
+            "azure_managed_lustre_mdt_connected_clients",
+            (
+                "Azure Managed Lustre MDT connected client count (exports) from Azure "
+                "Monitor MDTConnectedClients. Each mounted Lustre client opens one export "
+                "per MDT, so ``max by (filesystem_name) (...)`` approximates the total "
+                "number of clients connected to the filesystem."
+            ),
+            LUSTRE_MDT_LABELS,
+            registry=effective_registry,
+        )
         self.lustre_mdt_client_latency = Gauge(
             "azure_managed_lustre_mdt_client_latency_milliseconds",
             "Azure Managed Lustre MDT client latency from Azure Monitor MDTClientLatency.",
@@ -364,9 +386,14 @@ class VmssMetricsExporter:
             LUSTRE_FILESYSTEM_CAPACITY_LABELS,
             registry=effective_registry,
         )
-        self.lustre_ost_total = Gauge(
-            "azure_managed_lustre_ost_total",
-            "Number of Azure Managed Lustre OST sample series produced by the latest collection.",
+        self.lustre_ost_sample_count = Gauge(
+            "azure_managed_lustre_ost_sample_count",
+            (
+                "Number of Azure Managed Lustre OST sample series produced by the latest "
+                "collection. One series per OST per filesystem that returned data \u2014 "
+                "this approximates total OST count only when every OST reported at least "
+                "one metric."
+            ),
             registry=effective_registry,
         )
         self.lustre_last_success_timestamp = Gauge(
@@ -462,7 +489,7 @@ class VmssMetricsExporter:
                 )
                 return result
             self.lustre_filesystem_total.set(result.filesystem_count)
-            self.lustre_ost_total.set(len(result.metrics))
+            self.lustre_ost_sample_count.set(len(result.metrics))
             if result.error_count:
                 self.lustre_collection_errors.inc(result.error_count)
             self.lustre_last_success_timestamp.set(time.time())
@@ -546,6 +573,7 @@ class VmssMetricsExporter:
                 self.lustre_client_read_throughput,
                 self.lustre_client_write_ops,
                 self.lustre_client_write_throughput,
+                self.lustre_ost_connected_clients,
                 self.lustre_ost_sample_timestamp,
                 self.lustre_ost_client_latency,
                 self.lustre_ost_client_ops,
@@ -563,6 +591,7 @@ class VmssMetricsExporter:
                 self.lustre_mdt_sample_timestamp,
                 self.lustre_hsm_action_errors,
                 self.lustre_hsm_current_requests,
+                self.lustre_mdt_connected_clients,
                 self.lustre_mdt_client_latency,
                 self.lustre_mdt_client_ops,
                 self.lustre_mdt_operation_sample_timestamp,
@@ -581,7 +610,7 @@ class VmssMetricsExporter:
             # Reset summary scalars so dashboards don't show stale totals on the follower.
             self.vmss_total.set(0)
             self.lustre_filesystem_total.set(0)
-            self.lustre_ost_total.set(0)
+            self.lustre_ost_sample_count.set(0)
             self.last_success_timestamp.set(0)
             self.collection_duration.set(0)
             self.lustre_last_success_timestamp.set(0)
@@ -724,6 +753,7 @@ class VmssMetricsExporter:
                         self.lustre_client_read_throughput,
                         self.lustre_client_write_ops,
                         self.lustre_client_write_throughput,
+                        self.lustre_ost_connected_clients,
                         self.lustre_ost_sample_timestamp,
                     ):
                         with suppress(KeyError):
@@ -751,6 +781,7 @@ class VmssMetricsExporter:
                         self.lustre_mdt_sample_timestamp,
                         self.lustre_hsm_action_errors,
                         self.lustre_hsm_current_requests,
+                        self.lustre_mdt_connected_clients,
                     ):
                         with suppress(KeyError):
                             gauge.remove(*stale)
@@ -817,6 +848,11 @@ class VmssMetricsExporter:
                     self.lustre_client_write_throughput,
                     metric.label_values,
                     metric.client_write_throughput_bytes_per_second,
+                )
+                self._set_or_remove_lustre_gauge(
+                    self.lustre_ost_connected_clients,
+                    metric.label_values,
+                    metric.connected_clients,
                 )
                 self.lustre_ost_sample_timestamp.labels(*metric.label_values).set(
                     metric.sample_timestamp_seconds or time.time()
@@ -897,6 +933,11 @@ class VmssMetricsExporter:
                     self.lustre_hsm_current_requests,
                     metric.label_values,
                     metric.hsm_current_requests,
+                )
+                self._set_or_remove_lustre_gauge(
+                    self.lustre_mdt_connected_clients,
+                    metric.label_values,
+                    metric.connected_clients,
                 )
                 self.lustre_mdt_sample_timestamp.labels(*metric.label_values).set(
                     metric.sample_timestamp_seconds or time.time()

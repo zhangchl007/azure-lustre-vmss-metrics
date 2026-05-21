@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -109,6 +111,28 @@ def test_select_files_respects_byte_budget(dataset_tree: Path):
     assert sum(entry.size for entry in selected) <= 1 * 1024 * 1024
     # Should include only files <= 1 MiB
     assert all(entry.size <= 1 * 1024 * 1024 for entry in selected)
+
+
+def test_stable_seed_uses_sha256_prefix():
+    value = "run=av-press-test;pod=3"
+    expected = int.from_bytes(hashlib.sha256(value.encode("utf-8")).digest()[:8], "big")
+    assert av.stable_seed(value) == expected
+
+
+def test_stable_seed_is_process_independent():
+    code = f"""
+import importlib.util
+import sys
+path = {str(SCRIPT_PATH)!r}
+spec = importlib.util.spec_from_file_location('av_lustre_workload_subprocess', path)
+module = importlib.util.module_from_spec(spec)
+sys.modules['av_lustre_workload_subprocess'] = module
+spec.loader.exec_module(module)
+print(module.stable_seed('run=av-press-test;pod=3'))
+"""
+    first = subprocess.check_output([sys.executable, "-c", code], text=True).strip()
+    second = subprocess.check_output([sys.executable, "-c", code], text=True).strip()
+    assert first == second == str(av.stable_seed("run=av-press-test;pod=3"))
 
 
 def test_percentile_linear_interpolation():
@@ -394,7 +418,10 @@ def test_run_read_write_output_blocks_overlapping_roots(dataset_tree: Path):
         av.run_read(args, write_outputs=True)
 
 
-def test_run_read_write_output_rejects_bad_run_id(dataset_tree: Path, tmp_path: Path):
+@pytest.mark.parametrize("bad_run_id", ["../escape", "foo/bar", ".", "..", ""])
+def test_run_read_write_output_rejects_bad_run_id(
+    dataset_tree: Path, tmp_path: Path, bad_run_id: str
+):
     parser = av.build_parser()
     args = parser.parse_args(
         [
@@ -405,7 +432,7 @@ def test_run_read_write_output_rejects_bad_run_id(dataset_tree: Path, tmp_path: 
             "--result-root",
             str(tmp_path / "results"),
             "--run-id",
-            "../escape",
+            bad_run_id,
             "--pod-name",
             "pod-0",
             "--pod-index",
@@ -417,6 +444,31 @@ def test_run_read_write_output_rejects_bad_run_id(dataset_tree: Path, tmp_path: 
     av._resolve_pod_identity(args)
     with pytest.raises(ValueError):
         av.run_read(args, write_outputs=True)
+
+
+def test_verify_output_rejects_nested_run_id(dataset_tree: Path, tmp_path: Path):
+    parser = av.build_parser()
+    args = parser.parse_args(
+        [
+            "--mode",
+            "verify-output",
+            "--dataset-root",
+            str(dataset_tree),
+            "--result-root",
+            str(tmp_path / "results"),
+            "--run-id",
+            "foo/bar",
+            "--pod-name",
+            "pod-0",
+            "--pod-index",
+            "0",
+            "--pod-count",
+            "1",
+        ]
+    )
+    av._resolve_pod_identity(args)
+    with pytest.raises(ValueError):
+        av.run_verify(args)
 
 
 def test_verify_output_succeeds(dataset_tree: Path, tmp_path: Path):
