@@ -145,7 +145,7 @@
     {
       "type": "stat",
       "id": 4,
-      "title": "Scale gap (capacity - actual)",
+      "title": "Scale gap",
       "description": "Count of VMSS where desired capacity differs from the actual observed VM instance count.",
       "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
       "gridPos": {"h": 4, "w": 4, "x": 12, "y": 1},
@@ -223,7 +223,7 @@
     {
       "type": "stat",
       "id": 6,
-      "title": "Collection errors (5m rate)",
+      "title": "Collection errors",
       "description": "Rate of failed Azure Resource Graph collections in the last 5 minutes.",
       "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
       "gridPos": {"h": 4, "w": 4, "x": 20, "y": 1},
@@ -270,10 +270,10 @@
     {
       "type": "timeseries",
       "id": 7,
-      "title": "VMSS instance count trend (top $top_n by $rank_by, non-zero)",
+      "title": "Top VMSS instance count",
       "description": "TRUE line chart: Y axis = actual VM instance count, NOT stacked. Each VMSS is one colored line. To stay readable at scale, only the top $top_n VMSS ranked by $rank_by are drawn — adjust the variables at the top of the dashboard to expand or narrow the view. Use $resource_group / $vmss_name to drill down further. Two VMSS with identical instance counts overlap at the same Y position by design (this is the truth — they share the same value); use the legend table on the right and the State Timeline panel beside this one to disambiguate.",
       "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-      "gridPos": {"h": 10, "w": 14, "x": 0, "y": 6},
+      "gridPos": {"h": 10, "w": 24, "x": 0, "y": 6},
       "targets": [
         {
           "expr": "topk($top_n,\n  $rank_by by (subscription_id, resource_group, vmss_name, location, orchestration_mode) (\n    azure_vmss_instance_count{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", vmss_name=~\"$vmss_name\", location=~\"$location\"}\n  ) > 0\n)",
@@ -317,10 +317,10 @@
     {
       "type": "state-timeline",
       "id": 13,
-      "title": "Per-VMSS instance count timeline (top $top_n by $rank_by)",
+      "title": "Top VMSS timeline",
       "description": "One horizontal row per VMSS — no geometric overlap is possible even when many VMSS share the same instance count. Limited to top $top_n by $rank_by to remain legible at high cardinality. Color encodes instance count.",
       "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-      "gridPos": {"h": 10, "w": 10, "x": 14, "y": 6},
+      "gridPos": {"h": 10, "w": 24, "x": 0, "y": 16},
       "targets": [
         {
           "expr": "topk($top_n,\n  $rank_by by (subscription_id, resource_group, vmss_name, location, orchestration_mode) (\n    azure_vmss_instance_count{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", vmss_name=~\"$vmss_name\", location=~\"$location\"}\n  ) > 0\n)",
@@ -367,17 +367,17 @@
       "type": "row",
       "id": 104,
       "title": "Aggregations & Distribution",
-      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 16},
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 26},
       "collapsed": false,
       "panels": []
     },
     {
       "type": "heatmap",
       "id": 14,
-      "title": "VMSS instance-count distribution over time (all VMSS)",
+      "title": "Instance-count distribution",
       "description": "Heatmap density view that scales to 100s/1000s of VMSS without any top-N filter. X = time, Y = instance count value, color intensity = number of VMSS that have that instance count at that time. Use this to see overall fleet behaviour (e.g. how many VMSS are idle at 0, how many running with 1\u20133, etc.) regardless of cardinality. The trend chart above only shows top $top_n series; this heatmap shows ALL.",
       "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-      "gridPos": {"h": 8, "w": 14, "x": 0, "y": 17},
+      "gridPos": {"h": 8, "w": 14, "x": 0, "y": 27},
       "targets": [
         {
           "expr": "max by (subscription_id, resource_group, vmss_name, location, orchestration_mode) (\n  azure_vmss_instance_count{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", vmss_name=~\"$vmss_name\", location=~\"$location\"}\n)",
@@ -429,10 +429,10 @@
     {
       "type": "timeseries",
       "id": 15,
-      "title": "Total instances by resource group (top $top_n)",
+      "title": "Instances by resource group",
       "description": "Stacked area chart of total VM instances summed per resource group. Provides a low-cardinality rollup view that stays readable even when the underlying fleet has hundreds of VMSS. Only the top $top_n resource groups by current total instances are shown.",
       "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-      "gridPos": {"h": 8, "w": 10, "x": 14, "y": 17},
+      "gridPos": {"h": 8, "w": 10, "x": 14, "y": 27},
       "targets": [
         {
           "expr": "topk($top_n,\n  sum by (resource_group) (\n    max by (subscription_id, resource_group, vmss_name, location, orchestration_mode) (\n      azure_vmss_instance_count{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", vmss_name=~\"$vmss_name\", location=~\"$location\"}\n    )\n  )\n)",
@@ -474,7 +474,7 @@
       "title": "Total instances by subscription",
       "description": "Aggregate VM instances per Azure subscription.",
       "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 25},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 35},
       "targets": [
         {
           "expr": "sum by (subscription_id) (\n  max by (subscription_id, resource_group, vmss_name, location, orchestration_mode) (\n    azure_vmss_instance_count{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", vmss_name=~\"$vmss_name\", location=~\"$location\"}\n  )\n)",
@@ -511,7 +511,7 @@
       "title": "Total instances by location",
       "description": "Aggregate VM instances per Azure region.",
       "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 25},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 35},
       "targets": [
         {
           "expr": "sum by (location) (\n  max by (subscription_id, resource_group, vmss_name, location, orchestration_mode) (\n    azure_vmss_instance_count{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", vmss_name=~\"$vmss_name\", location=~\"$location\"}\n  )\n)",
@@ -546,7 +546,7 @@
       "type": "row",
       "id": 102,
       "title": "Current snapshot",
-      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 33},
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 43},
       "collapsed": false,
       "panels": []
     },
@@ -556,7 +556,7 @@
       "title": "Current instance count by VMSS",
       "description": "Most recent observed VM instance count, sorted descending. Labels include resource group so VMSS with identical names across clusters are not collapsed.",
       "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-      "gridPos": {"h": 12, "w": 12, "x": 0, "y": 34},
+      "gridPos": {"h": 12, "w": 12, "x": 0, "y": 44},
       "targets": [
         {
           "expr": "max by (subscription_id, resource_group, vmss_name, location, orchestration_mode) (\n  azure_vmss_instance_count{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", vmss_name=~\"$vmss_name\", location=~\"$location\"}\n)",
@@ -597,7 +597,7 @@
       "title": "VMSS inventory (latest)",
       "description": "Current VMSS view with VM size, desired capacity, actual instances, and drift.",
       "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-      "gridPos": {"h": 12, "w": 12, "x": 12, "y": 34},
+      "gridPos": {"h": 12, "w": 12, "x": 12, "y": 44},
       "targets": [
         {
           "expr": "max by (subscription_id, resource_group, vmss_name, location, orchestration_mode) (\n  azure_vmss_instance_count{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", vmss_name=~\"$vmss_name\", location=~\"$location\"}\n)\n* on (subscription_id, resource_group, vmss_name, location, orchestration_mode) group_left(vm_size)\nmax by (subscription_id, resource_group, vmss_name, location, orchestration_mode, vm_size) (\n  azure_vmss_info{job=\"$job\"}\n)",
@@ -719,7 +719,7 @@
       "options": {
         "showHeader": true,
         "cellHeight": "sm",
-        "sortBy": [{"displayName": "instances", "desc": true}]
+        "sortBy": [{"displayName": "drift", "desc": true}, {"displayName": "instances", "desc": true}]
       },
       "pluginVersion": "10.4.0"
     },
@@ -727,7 +727,7 @@
       "type": "row",
       "id": 103,
       "title": "Capacity vs actual",
-      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 46},
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 56},
       "collapsed": true,
       "panels": [
         {
@@ -736,7 +736,7 @@
           "title": "Capacity vs actual (selected VMSS)",
           "description": "Compare desired VMSS capacity to actual observed VM count. Use the vmss_name variable to focus on specific scale sets.",
           "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-          "gridPos": {"h": 10, "w": 24, "x": 0, "y": 47},
+          "gridPos": {"h": 10, "w": 24, "x": 0, "y": 57},
           "targets": [
             {
               "expr": "max by (subscription_id, resource_group, vmss_name, location, orchestration_mode) (\n  azure_vmss_capacity{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", vmss_name=~\"$vmss_name\", location=~\"$location\"}\n)",
@@ -935,6 +935,6 @@
   "timezone": "",
   "title": "Azure VMSS Inventory & Trends",
   "uid": "azure-vmss-exporter",
-  "version": 1,
+  "version": 3,
   "weekStart": ""
 }

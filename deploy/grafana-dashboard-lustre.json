@@ -64,7 +64,7 @@
       "description": "Worst filesystem-level OST data-capacity pressure signal. The stat keeps the filesystem identity so fleet views show which Lustre filesystem needs attention.",
       "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
       "gridPos": {"h": 4, "w": 3, "x": 3, "y": 1},
-      "targets": [{"expr": "bottomk(1, min by (subscription_id, resource_group, filesystem_name, location) (max by (subscription_id, resource_group, filesystem_name, location, ostnum) (azure_managed_lustre_ost_bytes_available_percent{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", filesystem_name=~\"$filesystem_name\", location=~\"$location\", ostnum=~\"$ostnum\"})))", "legendFormat": "{{resource_group}}/{{filesystem_name}}", "refId": "A"}],
+      "targets": [{"expr": "bottomk(1, min by (subscription_id, resource_group, filesystem_name, location) (max by (subscription_id, resource_group, filesystem_name, location, ostnum) (azure_managed_lustre_ost_bytes_available_percent{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", filesystem_name=~\"$filesystem_name\", location=~\"$location\", ostnum=~\"$ostnum\"})))", "legendFormat": "{{filesystem_name}}", "refId": "A"}],
       "fieldConfig": {"defaults": {"unit": "percent", "decimals": 2, "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "orange", "value": 20}, {"color": "green", "value": 25}]}}, "overrides": []},
       "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "colorMode": "background", "graphMode": "none", "justifyMode": "auto", "textMode": "value_and_name"},
       "pluginVersion": "10.4.0"
@@ -76,7 +76,7 @@
       "description": "Worst filesystem-level metadata file/inode exhaustion signal. The stat keeps the filesystem identity for multi-filesystem fleet views.",
       "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
       "gridPos": {"h": 4, "w": 3, "x": 6, "y": 1},
-      "targets": [{"expr": "bottomk(1, min by (subscription_id, resource_group, filesystem_name, location) (max by (subscription_id, resource_group, filesystem_name, location, mdtnum) (azure_managed_lustre_mdt_files_free_percent{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", filesystem_name=~\"$filesystem_name\", location=~\"$location\", mdtnum=~\"$mdtnum\"})))", "legendFormat": "{{resource_group}}/{{filesystem_name}}", "refId": "A"}],
+      "targets": [{"expr": "bottomk(1, min by (subscription_id, resource_group, filesystem_name, location) (max by (subscription_id, resource_group, filesystem_name, location, mdtnum) (azure_managed_lustre_mdt_files_free_percent{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", filesystem_name=~\"$filesystem_name\", location=~\"$location\", mdtnum=~\"$mdtnum\"})))", "legendFormat": "{{filesystem_name}}", "refId": "A"}],
       "fieldConfig": {"defaults": {"unit": "percent", "decimals": 2, "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "orange", "value": 15}, {"color": "green", "value": 30}]}}, "overrides": []},
       "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "colorMode": "background", "graphMode": "none", "justifyMode": "auto", "textMode": "value_and_name"},
       "pluginVersion": "10.4.0"
@@ -88,7 +88,7 @@
       "description": "Worst filesystem-level MDT storage-capacity pressure signal. The stat keeps the filesystem identity for multi-filesystem fleet views.",
       "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
       "gridPos": {"h": 4, "w": 3, "x": 9, "y": 1},
-      "targets": [{"expr": "bottomk(1, min by (subscription_id, resource_group, filesystem_name, location) (max by (subscription_id, resource_group, filesystem_name, location, mdtnum) (azure_managed_lustre_mdt_bytes_available_percent{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", filesystem_name=~\"$filesystem_name\", location=~\"$location\", mdtnum=~\"$mdtnum\"})))", "legendFormat": "{{resource_group}}/{{filesystem_name}}", "refId": "A"}],
+      "targets": [{"expr": "bottomk(1, min by (subscription_id, resource_group, filesystem_name, location) (max by (subscription_id, resource_group, filesystem_name, location, mdtnum) (azure_managed_lustre_mdt_bytes_available_percent{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", filesystem_name=~\"$filesystem_name\", location=~\"$location\", mdtnum=~\"$mdtnum\"})))", "legendFormat": "{{filesystem_name}}", "refId": "A"}],
       "fieldConfig": {"defaults": {"unit": "percent", "decimals": 2, "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "orange", "value": 10}, {"color": "green", "value": 25}]}}, "overrides": []},
       "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "colorMode": "background", "graphMode": "none", "justifyMode": "auto", "textMode": "value_and_name"},
       "pluginVersion": "10.4.0"
@@ -112,7 +112,7 @@
       "description": "Oldest filesystem-level Azure Monitor OST sample age in seconds. The stat keeps the filesystem identity for multi-filesystem freshness triage.",
       "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
       "gridPos": {"h": 4, "w": 3, "x": 15, "y": 1},
-      "targets": [{"expr": "topk(1, max by (subscription_id, resource_group, filesystem_name, location) (time() - azure_managed_lustre_ost_sample_timestamp_seconds{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", filesystem_name=~\"$filesystem_name\", location=~\"$location\", ostnum=~\"$ostnum\"}))", "legendFormat": "{{resource_group}}/{{filesystem_name}}", "refId": "A"}],
+      "targets": [{"expr": "topk(1, max by (subscription_id, resource_group, filesystem_name, location) (time() - azure_managed_lustre_ost_sample_timestamp_seconds{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", filesystem_name=~\"$filesystem_name\", location=~\"$location\", ostnum=~\"$ostnum\"}))", "legendFormat": "{{filesystem_name}}", "refId": "A"}],
       "fieldConfig": {"defaults": {"unit": "s", "decimals": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "orange", "value": 180}, {"color": "red", "value": 300}]}}, "overrides": []},
       "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "colorMode": "background", "graphMode": "none", "justifyMode": "auto", "textMode": "value_and_name"},
       "pluginVersion": "10.4.0"
@@ -124,7 +124,7 @@
       "description": "Oldest filesystem-level Azure Monitor MDT sample age in seconds. The stat keeps the filesystem identity for multi-filesystem freshness triage.",
       "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
       "gridPos": {"h": 4, "w": 3, "x": 18, "y": 1},
-      "targets": [{"expr": "topk(1, max by (subscription_id, resource_group, filesystem_name, location) (time() - azure_managed_lustre_mdt_sample_timestamp_seconds{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", filesystem_name=~\"$filesystem_name\", location=~\"$location\", mdtnum=~\"$mdtnum\"}))", "legendFormat": "{{resource_group}}/{{filesystem_name}}", "refId": "A"}],
+      "targets": [{"expr": "topk(1, max by (subscription_id, resource_group, filesystem_name, location) (time() - azure_managed_lustre_mdt_sample_timestamp_seconds{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", filesystem_name=~\"$filesystem_name\", location=~\"$location\", mdtnum=~\"$mdtnum\"}))", "legendFormat": "{{filesystem_name}}", "refId": "A"}],
       "fieldConfig": {"defaults": {"unit": "s", "decimals": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "orange", "value": 180}, {"color": "red", "value": 300}]}}, "overrides": []},
       "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "colorMode": "background", "graphMode": "none", "justifyMode": "auto", "textMode": "value_and_name"},
       "pluginVersion": "10.4.0"
@@ -586,6 +586,6 @@
   "timezone": "",
   "title": "Azure Managed Lustre Key Metrics",
   "uid": "azure-managed-lustre-key-metrics",
-  "version": 5,
+  "version": 6,
   "weekStart": ""
 }
