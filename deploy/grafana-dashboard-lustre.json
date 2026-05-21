@@ -186,7 +186,7 @@
       "type": "row",
       "id": 102,
       "title": "Client workload",
-      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 14},
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 23},
       "collapsed": false,
       "panels": []
     },
@@ -196,7 +196,7 @@
       "title": "Client read/write throughput by filesystem",
       "description": "Client data transfer rate grouped by filesystem.",
       "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 15},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 24},
       "targets": [
         {"expr": "topk($top_n, sum by (filesystem_name) (azure_managed_lustre_client_read_throughput_bytes_per_second{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", filesystem_name=~\"$filesystem_name\", location=~\"$location\", ostnum=~\"$ostnum\"}))", "legendFormat": "read · {{filesystem_name}}", "refId": "A"},
         {"expr": "topk($top_n, sum by (filesystem_name) (azure_managed_lustre_client_write_throughput_bytes_per_second{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", filesystem_name=~\"$filesystem_name\", location=~\"$location\", ostnum=~\"$ostnum\"}))", "legendFormat": "write · {{filesystem_name}}", "refId": "B"}
@@ -210,7 +210,7 @@
       "title": "Client read/write ops by filesystem",
       "description": "Client read and write operation counts grouped by filesystem.",
       "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 15},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 24},
       "targets": [
         {"expr": "topk($top_n, sum by (filesystem_name) (azure_managed_lustre_client_read_ops{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", filesystem_name=~\"$filesystem_name\", location=~\"$location\", ostnum=~\"$ostnum\"}))", "legendFormat": "read ops · {{filesystem_name}}", "refId": "A"},
         {"expr": "topk($top_n, sum by (filesystem_name) (azure_managed_lustre_client_write_ops{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", filesystem_name=~\"$filesystem_name\", location=~\"$location\", ostnum=~\"$ostnum\"}))", "legendFormat": "write ops · {{filesystem_name}}", "refId": "B"}
@@ -222,7 +222,7 @@
       "type": "row",
       "id": 103,
       "title": "Operation latency and ops",
-      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 23},
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 32},
       "collapsed": false,
       "panels": []
     },
@@ -232,7 +232,7 @@
       "title": "OST client latency",
       "description": "OST operation latency by filesystem and operation. Values are milliseconds from Azure Monitor OSTClientLatency.",
       "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 24},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 33},
       "targets": [
         {"expr": "topk($top_n, max by (filesystem_name, ostnum, operation) (azure_managed_lustre_ost_client_latency_milliseconds{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", filesystem_name=~\"$filesystem_name\", location=~\"$location\", ostnum=~\"$ostnum\"}))", "legendFormat": "{{filesystem_name}} · OST {{ostnum}} · {{operation}}", "refId": "A"}
       ],
@@ -245,7 +245,7 @@
       "title": "OST client ops",
       "description": "OST operation count by filesystem and operation from Azure Monitor OSTClientOps. This is a sampled count value, not latency.",
       "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 24},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 33},
       "targets": [
         {"expr": "topk($top_n, max by (filesystem_name, ostnum, operation) (azure_managed_lustre_ost_client_ops{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", filesystem_name=~\"$filesystem_name\", location=~\"$location\", ostnum=~\"$ostnum\"}))", "legendFormat": "{{filesystem_name}} · OST {{ostnum}} · {{operation}}", "refId": "A"}
       ],
@@ -258,7 +258,7 @@
       "title": "MDT client latency",
       "description": "MDT operation latency by filesystem and operation. Values are milliseconds from Azure Monitor MDTClientLatency.",
       "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 32},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 41},
       "targets": [
         {"expr": "topk($top_n, max by (filesystem_name, mdtnum, operation) (azure_managed_lustre_mdt_client_latency_milliseconds{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", filesystem_name=~\"$filesystem_name\", location=~\"$location\", mdtnum=~\"$mdtnum\"}))", "legendFormat": "{{filesystem_name}} · MDT {{mdtnum}} · {{operation}}", "refId": "A"}
       ],
@@ -271,7 +271,7 @@
       "title": "MDT client ops",
       "description": "MDT operation count by filesystem and operation from Azure Monitor MDTClientOps. This is a sampled count value, not latency.",
       "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 32},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 41},
       "targets": [
         {"expr": "topk($top_n, max by (filesystem_name, mdtnum, operation) (azure_managed_lustre_mdt_client_ops{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", filesystem_name=~\"$filesystem_name\", location=~\"$location\", mdtnum=~\"$mdtnum\"}))", "legendFormat": "{{filesystem_name}} · MDT {{mdtnum}} · {{operation}}", "refId": "A"}
       ],
@@ -282,7 +282,7 @@
       "type": "row",
       "id": 105,
       "title": "HSM reliability",
-      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 40},
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 49},
       "collapsed": false,
       "panels": []
     },
@@ -292,7 +292,7 @@
       "title": "Max HSM action errors",
       "description": "Maximum HSM action errors across selected MDTs. Any non-zero value should be investigated.",
       "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-      "gridPos": {"h": 4, "w": 12, "x": 0, "y": 41},
+      "gridPos": {"h": 4, "w": 12, "x": 0, "y": 50},
       "targets": [{"expr": "max(azure_managed_lustre_hsm_action_errors{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", filesystem_name=~\"$filesystem_name\", location=~\"$location\", mdtnum=~\"$mdtnum\"})", "legendFormat": "max HSM errors", "refId": "A"}],
       "fieldConfig": {"defaults": {"unit": "short", "decimals": 2, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "orange", "value": 0.001}, {"color": "red", "value": 1}]}}, "overrides": []},
       "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "colorMode": "background", "graphMode": "none", "justifyMode": "auto", "textMode": "auto"},
@@ -304,7 +304,7 @@
       "title": "Max HSM in-flight",
       "description": "Maximum HSM in-flight requests across selected MDTs. Sustained growth can indicate HSM backlog.",
       "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-      "gridPos": {"h": 4, "w": 12, "x": 12, "y": 41},
+      "gridPos": {"h": 4, "w": 12, "x": 12, "y": 50},
       "targets": [{"expr": "max(azure_managed_lustre_hsm_current_requests{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", filesystem_name=~\"$filesystem_name\", location=~\"$location\", mdtnum=~\"$mdtnum\"})", "legendFormat": "max HSM in-flight", "refId": "A"}],
       "fieldConfig": {"defaults": {"unit": "short", "decimals": 2, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "orange", "value": 100}, {"color": "red", "value": 500}]}}, "overrides": []},
       "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "colorMode": "background", "graphMode": "none", "justifyMode": "auto", "textMode": "auto"},
@@ -316,7 +316,7 @@
       "title": "HSM action errors trend",
       "description": "Top-N MDTs by HSM action errors (Azure Monitor HSMActionErrors). Non-zero values indicate HSM action failures and should be investigated.",
       "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 45},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 54},
       "targets": [
         {"expr": "topk($top_n, max by (filesystem_name, mdtnum) (azure_managed_lustre_hsm_action_errors{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", filesystem_name=~\"$filesystem_name\", location=~\"$location\", mdtnum=~\"$mdtnum\"}))", "legendFormat": "{{filesystem_name}} · MDT {{mdtnum}}", "refId": "A"}
       ],
@@ -327,11 +327,12 @@
       "type": "timeseries",
       "id": 19,
       "title": "HSM in-flight requests trend",
-      "description": "Top-N MDTs by HSM in-flight requests (Azure Monitor HSMCurrentRequests). Sustained growth indicates HSM backlog.",
+      "description": "Top-N MDTs by HSM in-flight requests (Azure Monitor HSMCurrentRequests). Sustained growth indicates HSM backlog; the warning reference line uses $hsm_inflight_warn.",
       "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 45},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 54},
       "targets": [
-        {"expr": "topk($top_n, max by (filesystem_name, mdtnum) (azure_managed_lustre_hsm_current_requests{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", filesystem_name=~\"$filesystem_name\", location=~\"$location\", mdtnum=~\"$mdtnum\"}))", "legendFormat": "{{filesystem_name}} · MDT {{mdtnum}}", "refId": "A"}
+        {"expr": "topk($top_n, max by (filesystem_name, mdtnum) (azure_managed_lustre_hsm_current_requests{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", filesystem_name=~\"$filesystem_name\", location=~\"$location\", mdtnum=~\"$mdtnum\"}))", "legendFormat": "{{filesystem_name}} · MDT {{mdtnum}}", "refId": "A"},
+        {"expr": "vector($hsm_inflight_warn)", "legendFormat": "HSM warn threshold", "refId": "B"}
       ],
       "fieldConfig": {"defaults": {"decimals": 2, "min": 0, "custom": {"drawStyle": "line", "lineInterpolation": "smooth", "lineWidth": 2, "fillOpacity": 10, "showPoints": "never", "spanNulls": true, "stacking": {"mode": "none", "group": "A"}}}, "overrides": []},
       "options": {"legend": {"displayMode": "table", "placement": "bottom", "showLegend": true, "calcs": ["lastNotNull", "max"]}, "tooltip": {"mode": "multi", "sort": "desc"}}
@@ -341,7 +342,7 @@
       "id": 107,
       "title": "Client connections",
       "description": "Connected client (export) counts from Azure Monitor OSTConnectedClients / MDTConnectedClients. Each mounted Lustre client opens one export per MDT and one per OST, so max-by-filesystem of MDT connections approximates the total client count.",
-      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 53},
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 62},
       "collapsed": false,
       "panels": []
     },
@@ -351,7 +352,7 @@
       "title": "Max OST clients",
       "description": "Maximum OST connected client count across selected OSTs. Approximates the number of clients actively talking to the busiest OST.",
       "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-      "gridPos": {"h": 4, "w": 6, "x": 0, "y": 54},
+      "gridPos": {"h": 4, "w": 6, "x": 0, "y": 63},
       "targets": [{"expr": "max(azure_managed_lustre_ost_connected_clients{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", filesystem_name=~\"$filesystem_name\", location=~\"$location\", ostnum=~\"$ostnum\"})", "legendFormat": "max OST clients", "refId": "A"}],
       "fieldConfig": {"defaults": {"unit": "short", "decimals": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}}, "overrides": []},
       "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "colorMode": "value", "graphMode": "area", "justifyMode": "auto", "textMode": "auto"},
@@ -363,7 +364,7 @@
       "title": "Max MDT clients",
       "description": "Maximum MDT connected client count across selected MDTs. Because each mounted client opens one export per MDT, this approximates the largest client population among selected filesystems.",
       "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-      "gridPos": {"h": 4, "w": 6, "x": 6, "y": 54},
+      "gridPos": {"h": 4, "w": 6, "x": 6, "y": 63},
       "targets": [{"expr": "max(azure_managed_lustre_mdt_connected_clients{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", filesystem_name=~\"$filesystem_name\", location=~\"$location\", mdtnum=~\"$mdtnum\"})", "legendFormat": "max MDT clients", "refId": "A"}],
       "fieldConfig": {"defaults": {"unit": "short", "decimals": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}}, "overrides": []},
       "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "colorMode": "value", "graphMode": "area", "justifyMode": "auto", "textMode": "auto"},
@@ -375,7 +376,7 @@
       "title": "Total client exports (MDT)",
       "description": "Sum across selected filesystems of the per-filesystem max MDT connected client count. Roughly equal to the total Lustre client mounts in scope.",
       "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-      "gridPos": {"h": 4, "w": 6, "x": 12, "y": 54},
+      "gridPos": {"h": 4, "w": 6, "x": 12, "y": 63},
       "targets": [{"expr": "sum(max by (subscription_id, resource_group, filesystem_name, location) (azure_managed_lustre_mdt_connected_clients{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", filesystem_name=~\"$filesystem_name\", location=~\"$location\", mdtnum=~\"$mdtnum\"}))", "legendFormat": "total client exports", "refId": "A"}],
       "fieldConfig": {"defaults": {"unit": "short", "decimals": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}}, "overrides": []},
       "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "colorMode": "value", "graphMode": "area", "justifyMode": "auto", "textMode": "auto"},
@@ -387,7 +388,7 @@
       "title": "Min OST clients",
       "description": "Minimum OST connected client count across selected OSTs. A sharp drop on a single OST can indicate failover, eviction or routing imbalance.",
       "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-      "gridPos": {"h": 4, "w": 6, "x": 18, "y": 54},
+      "gridPos": {"h": 4, "w": 6, "x": 18, "y": 63},
       "targets": [{"expr": "min(azure_managed_lustre_ost_connected_clients{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", filesystem_name=~\"$filesystem_name\", location=~\"$location\", ostnum=~\"$ostnum\"})", "legendFormat": "min OST clients", "refId": "A"}],
       "fieldConfig": {"defaults": {"unit": "short", "decimals": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}}, "overrides": []},
       "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "colorMode": "value", "graphMode": "none", "justifyMode": "auto", "textMode": "auto"},
@@ -399,7 +400,7 @@
       "title": "OST client connections trend",
       "description": "Top-N OSTs by connected client count (Azure Monitor OSTConnectedClients). Useful to spot OSTs whose client population diverges from the rest of the filesystem.",
       "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 58},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 67},
       "targets": [
         {"expr": "topk($top_n, max by (filesystem_name, ostnum) (azure_managed_lustre_ost_connected_clients{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", filesystem_name=~\"$filesystem_name\", location=~\"$location\", ostnum=~\"$ostnum\"}))", "legendFormat": "{{filesystem_name}} \u00b7 OST {{ostnum}}", "refId": "A"}
       ],
@@ -412,7 +413,7 @@
       "title": "MDT client connections trend",
       "description": "Top-N MDTs by connected client count (Azure Monitor MDTConnectedClients). max by (filesystem_name) of this series approximates the total mounted Lustre client count per filesystem.",
       "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 58},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 67},
       "targets": [
         {"expr": "topk($top_n, max by (filesystem_name, mdtnum) (azure_managed_lustre_mdt_connected_clients{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", filesystem_name=~\"$filesystem_name\", location=~\"$location\", mdtnum=~\"$mdtnum\"}))", "legendFormat": "{{filesystem_name}} \u00b7 MDT {{mdtnum}}", "refId": "A"}
       ],
@@ -423,7 +424,7 @@
       "type": "row",
       "id": 104,
       "title": "Filesystem inventory",
-      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 66},
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 88},
       "collapsed": false,
       "panels": []
     },
@@ -433,13 +434,143 @@
       "title": "Discovered Lustre filesystems",
       "description": "All Azure Managed Lustre filesystems discovered from Resource Graph, including filesystems with no current OST/MDT Azure Monitor samples.",
       "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 67},
+      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 89},
       "targets": [
         {"expr": "max by (subscription_id, resource_group, filesystem_name, location, sku_tier) (azure_managed_lustre_filesystem_info{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", filesystem_name=~\"$filesystem_name\", location=~\"$location\"})", "legendFormat": "{{filesystem_name}}", "refId": "A", "format": "table", "instant": true},
         {"expr": "max by (subscription_id, resource_group, filesystem_name, location) (azure_managed_lustre_filesystem_storage_capacity_tib{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", filesystem_name=~\"$filesystem_name\", location=~\"$location\"})", "legendFormat": "{{filesystem_name}} capacity", "refId": "B", "format": "table", "instant": true}
       ],
       "fieldConfig": {"defaults": {"custom": {"align": "auto", "cellOptions": {"type": "auto"}, "inspect": false}}, "overrides": []},
       "options": {"showHeader": true, "cellHeight": "sm", "footer": {"show": false, "reducer": ["sum"], "countRows": false, "fields": ""}},
+      "pluginVersion": "10.4.0"
+    },
+    {
+      "type": "row",
+      "id": 108,
+      "title": "Usage guardrails",
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 14},
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "id": 109,
+      "title": "OST used % vs 75/80 guardrails",
+      "description": "OST used percentage from Azure Monitor-derived bytes used / total. Warning at 75% and hard-stop/page at 80% per the production best-practices doc.",
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 15},
+      "targets": [
+        {"expr": "topk($top_n, max by (subscription_id, resource_group, filesystem_name, location, ostnum) (azure_managed_lustre_ost_bytes_used_percent{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", filesystem_name=~\"$filesystem_name\", location=~\"$location\", ostnum=~\"$ostnum\"}))", "legendFormat": "{{filesystem_name}} · OST {{ostnum}}", "refId": "A"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "percent", "decimals": 2, "min": 0, "max": 100, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "orange", "value": 75}, {"color": "red", "value": 80}]}, "custom": {"drawStyle": "line", "lineInterpolation": "stepAfter", "lineWidth": 2, "fillOpacity": 10, "showPoints": "never", "spanNulls": true, "stacking": {"mode": "none", "group": "A"}}}, "overrides": []},
+      "options": {"legend": {"displayMode": "table", "placement": "bottom", "showLegend": true, "calcs": ["lastNotNull", "max"]}, "tooltip": {"mode": "multi", "sort": "desc"}}
+    },
+    {
+      "type": "timeseries",
+      "id": 110,
+      "title": "MDT bytes used % vs 75/90 guardrails",
+      "description": "MDT byte usage. Warning at 75% and critical at 90% per the production best-practices doc.",
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 15},
+      "targets": [
+        {"expr": "topk($top_n, max by (subscription_id, resource_group, filesystem_name, location, mdtnum) (azure_managed_lustre_mdt_bytes_used_percent{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", filesystem_name=~\"$filesystem_name\", location=~\"$location\", mdtnum=~\"$mdtnum\"}))", "legendFormat": "{{filesystem_name}} · MDT {{mdtnum}}", "refId": "A"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "percent", "decimals": 2, "min": 0, "max": 100, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "orange", "value": 75}, {"color": "red", "value": 90}]}, "custom": {"drawStyle": "line", "lineInterpolation": "stepAfter", "lineWidth": 2, "fillOpacity": 10, "showPoints": "never", "spanNulls": true, "stacking": {"mode": "none", "group": "A"}}}, "overrides": []},
+      "options": {"legend": {"displayMode": "table", "placement": "bottom", "showLegend": true, "calcs": ["lastNotNull", "max"]}, "tooltip": {"mode": "multi", "sort": "desc"}}
+    },
+    {
+      "type": "timeseries",
+      "id": 111,
+      "title": "MDT inode used % vs 70/85 guardrails",
+      "description": "MDT inode/file usage. Warning at 70% and critical at 85% per the production best-practices doc.",
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 15},
+      "targets": [
+        {"expr": "topk($top_n, max by (subscription_id, resource_group, filesystem_name, location, mdtnum) (azure_managed_lustre_mdt_files_used_percent{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", filesystem_name=~\"$filesystem_name\", location=~\"$location\", mdtnum=~\"$mdtnum\"}))", "legendFormat": "{{filesystem_name}} · MDT {{mdtnum}}", "refId": "A"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "percent", "decimals": 2, "min": 0, "max": 100, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "orange", "value": 70}, {"color": "red", "value": 85}]}, "custom": {"drawStyle": "line", "lineInterpolation": "stepAfter", "lineWidth": 2, "fillOpacity": 10, "showPoints": "never", "spanNulls": true, "stacking": {"mode": "none", "group": "A"}}}, "overrides": []},
+      "options": {"legend": {"displayMode": "table", "placement": "bottom", "showLegend": true, "calcs": ["lastNotNull", "max"]}, "tooltip": {"mode": "multi", "sort": "desc"}}
+    },
+    {
+      "type": "row",
+      "id": 112,
+      "title": "Derived filesystem signals",
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 75},
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "type": "stat",
+      "id": 113,
+      "title": "Total provisioned AMLFS TiB",
+      "description": "Sum of configured Azure Managed Lustre storage capacity across selected filesystems from Resource Graph inventory.",
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "gridPos": {"h": 4, "w": 6, "x": 0, "y": 76},
+      "targets": [{"expr": "sum(azure_managed_lustre_filesystem_storage_capacity_tib{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", filesystem_name=~\"$filesystem_name\", location=~\"$location\"})", "legendFormat": "TiB", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "short", "decimals": 2, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}}, "overrides": []},
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "colorMode": "value", "graphMode": "area", "justifyMode": "auto", "textMode": "auto"},
+      "pluginVersion": "10.4.0"
+    },
+    {
+      "type": "stat",
+      "id": 114,
+      "title": "Max metadata amplification",
+      "description": "Maximum derived metadata amplification ratio across selected filesystems: sum(MDTClientOps) / max(sum(ClientReadOps + ClientWriteOps), 1).",
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "gridPos": {"h": 4, "w": 6, "x": 6, "y": 76},
+      "targets": [{"expr": "max(azure_managed_lustre_metadata_amplification_ratio{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", filesystem_name=~\"$filesystem_name\", location=~\"$location\"})", "legendFormat": "metadata amplification", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "short", "decimals": 3, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "orange", "value": 10}, {"color": "red", "value": 100}]}}, "overrides": []},
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "colorMode": "background", "graphMode": "area", "justifyMode": "auto", "textMode": "auto"},
+      "pluginVersion": "10.4.0"
+    },
+    {
+      "type": "stat",
+      "id": 115,
+      "title": "Max filesystem sample age",
+      "description": "Maximum derived sample age across selected filesystems. Computed from the oldest OST/MDT sample timestamp seen by the exporter for each filesystem.",
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "gridPos": {"h": 4, "w": 6, "x": 12, "y": 76},
+      "targets": [{"expr": "max(azure_managed_lustre_filesystem_sample_max_age_seconds{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", filesystem_name=~\"$filesystem_name\", location=~\"$location\"})", "legendFormat": "sample age", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "s", "decimals": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "orange", "value": 180}, {"color": "red", "value": 300}]}}, "overrides": []},
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "colorMode": "background", "graphMode": "none", "justifyMode": "auto", "textMode": "auto"},
+      "pluginVersion": "10.4.0"
+    },
+    {
+      "type": "stat",
+      "id": 116,
+      "title": "Total filesystem clients",
+      "description": "Sum of derived per-filesystem connected clients across the current selection. Uses max MDTConnectedClients per filesystem.",
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "gridPos": {"h": 4, "w": 6, "x": 18, "y": 76},
+      "targets": [{"expr": "sum(azure_managed_lustre_filesystem_connected_clients{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", filesystem_name=~\"$filesystem_name\", location=~\"$location\"})", "legendFormat": "clients", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "short", "decimals": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}}, "overrides": []},
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "colorMode": "value", "graphMode": "area", "justifyMode": "auto", "textMode": "auto"},
+      "pluginVersion": "10.4.0"
+    },
+    {
+      "type": "timeseries",
+      "id": 117,
+      "title": "Metadata amplification ratio trend",
+      "description": "Top-N filesystems by derived metadata amplification ratio. High values indicate tiny-file storms, stat()/lookup amplification, or directory scans relative to data read/write ops.",
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 80},
+      "targets": [
+        {"expr": "topk($top_n, max by (filesystem_name) (azure_managed_lustre_metadata_amplification_ratio{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", filesystem_name=~\"$filesystem_name\", location=~\"$location\"}))", "legendFormat": "{{filesystem_name}}", "refId": "A"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "short", "decimals": 3, "min": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "orange", "value": 10}, {"color": "red", "value": 100}]}, "custom": {"drawStyle": "line", "lineInterpolation": "smooth", "lineWidth": 2, "fillOpacity": 10, "showPoints": "never", "spanNulls": true, "stacking": {"mode": "none", "group": "A"}}}, "overrides": []},
+      "options": {"legend": {"displayMode": "table", "placement": "bottom", "showLegend": true, "calcs": ["lastNotNull", "max"]}, "tooltip": {"mode": "multi", "sort": "desc"}}
+    },
+    {
+      "type": "table",
+      "id": 118,
+      "title": "Per-filesystem sample age",
+      "description": "Derived per-filesystem Azure Monitor sample age from the exporter. Filesystems with no OST/MDT samples remain visible in the inventory table but do not have a derived sample-age row.",
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 80},
+      "targets": [
+        {"expr": "max by (subscription_id, resource_group, filesystem_name, location) (azure_managed_lustre_filesystem_sample_max_age_seconds{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", filesystem_name=~\"$filesystem_name\", location=~\"$location\"})", "legendFormat": "{{filesystem_name}}", "refId": "A", "format": "table", "instant": true}
+      ],
+      "fieldConfig": {"defaults": {"unit": "s", "decimals": 0, "custom": {"align": "auto", "cellOptions": {"type": "auto"}, "inspect": false}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "orange", "value": 180}, {"color": "red", "value": 300}]}}, "overrides": []},
+      "options": {"showHeader": true, "cellHeight": "sm", "footer": {"show": false, "reducer": ["max"], "countRows": false, "fields": ""}},
       "pluginVersion": "10.4.0"
     }
   ],
@@ -457,6 +588,7 @@
       {"name": "ostnum", "label": "OST (hidden: Azure Monitor exposes aggregate only)", "type": "query", "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}, "query": {"qryType": 1, "query": "label_values(azure_managed_lustre_ost_bytes_available{job=\"$job\", subscription_id=~\"$subscription_id\", location=~\"$location\", resource_group=~\"$resource_group\", filesystem_name=~\"$filesystem_name\"}, ostnum)", "refId": "StandardVariableQuery"}, "definition": "label_values(azure_managed_lustre_ost_bytes_available{job=\"$job\", subscription_id=~\"$subscription_id\", location=~\"$location\", resource_group=~\"$resource_group\", filesystem_name=~\"$filesystem_name\"}, ostnum)", "refresh": 2, "sort": 3, "multi": true, "includeAll": true, "allValue": ".*", "current": {"selected": true, "text": ["All"], "value": ["$__all"]}, "options": [], "hide": 2, "skipUrlSync": false},
       {"name": "mdtnum", "label": "MDT (hidden: Azure Monitor exposes aggregate only)", "type": "query", "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}, "query": {"qryType": 1, "query": "label_values(azure_managed_lustre_mdt_bytes_available{job=\"$job\", subscription_id=~\"$subscription_id\", location=~\"$location\", resource_group=~\"$resource_group\", filesystem_name=~\"$filesystem_name\"}, mdtnum)", "refId": "StandardVariableQuery"}, "definition": "label_values(azure_managed_lustre_mdt_bytes_available{job=\"$job\", subscription_id=~\"$subscription_id\", location=~\"$location\", resource_group=~\"$resource_group\", filesystem_name=~\"$filesystem_name\"}, mdtnum)", "refresh": 2, "sort": 3, "multi": true, "includeAll": true, "allValue": ".*", "current": {"selected": true, "text": ["All"], "value": ["$__all"]}, "options": [], "hide": 2, "skipUrlSync": false},
       {"name": "top_n", "label": "Top/Bottom N", "type": "custom", "query": "5,10,20,50,100", "current": {"selected": true, "text": "20", "value": "20"}, "options": [{"selected": false, "text": "5", "value": "5"}, {"selected": false, "text": "10", "value": "10"}, {"selected": true, "text": "20", "value": "20"}, {"selected": false, "text": "50", "value": "50"}, {"selected": false, "text": "100", "value": "100"}], "multi": false, "includeAll": false, "hide": 0, "skipUrlSync": false},
+      {"name": "hsm_inflight_warn", "label": "HSM in-flight warn", "type": "custom", "query": "50,100,200,500", "current": {"selected": true, "text": "100", "value": "100"}, "options": [{"selected": false, "text": "50", "value": "50"}, {"selected": true, "text": "100", "value": "100"}, {"selected": false, "text": "200", "value": "200"}, {"selected": false, "text": "500", "value": "500"}], "multi": false, "includeAll": false, "hide": 0, "skipUrlSync": false},
       {"name": "rank_by", "label": "Rank Bottom-N by", "type": "custom", "query": "min,avg", "current": {"selected": true, "text": "min", "value": "min"}, "options": [{"selected": true, "text": "min", "value": "min"}, {"selected": false, "text": "avg", "value": "avg"}], "multi": false, "includeAll": false, "hide": 0, "skipUrlSync": false}
     ]
   },
