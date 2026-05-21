@@ -134,6 +134,7 @@ def test_collect_once_sets_lustre_metrics_and_removes_stale_series() -> None:
                 client_write_ops=510.0,
                 client_write_throughput_bytes_per_second=610.0,
                 connected_clients=12.0,
+                sample_timestamp_seconds=170000.0,
             ),
         ),
         filesystem_count=1,
@@ -142,6 +143,7 @@ def test_collect_once_sets_lustre_metrics_and_removes_stale_series() -> None:
                 "sub-a", "rg-a", "lustre-a", "westus3", "0", "read",
                 client_latency_milliseconds=15.0,
                 client_ops=50.0,
+                sample_timestamp_seconds=170010.0,
             ),
         ),
         mdt_metrics=(
@@ -156,6 +158,7 @@ def test_collect_once_sets_lustre_metrics_and_removes_stale_series() -> None:
                 hsm_action_errors=1.0,
                 hsm_current_requests=12.0,
                 connected_clients=14.0,
+                sample_timestamp_seconds=170020.0,
             ),
         ),
         mdt_operation_metrics=(
@@ -163,6 +166,7 @@ def test_collect_once_sets_lustre_metrics_and_removes_stale_series() -> None:
                 "sub-a", "rg-a", "lustre-a", "westus3", "0", "open",
                 client_latency_milliseconds=1.0,
                 client_ops=10.0,
+                sample_timestamp_seconds=170030.0,
             ),
         ),
         filesystem_aggregate_metrics=(
@@ -269,7 +273,122 @@ def test_collect_once_sets_lustre_metrics_and_removes_stale_series() -> None:
     assert "azure_managed_lustre_filesystem_total 1.0" in metrics
     assert "azure_managed_lustre_ost_sample_count 1.0" in metrics
     assert "azure_managed_lustre_last_success_timestamp_seconds" in metrics
-    assert "azure_managed_lustre_ost_sample_timestamp_seconds" in metrics
+    assert (
+        f"azure_managed_lustre_ost_sample_timestamp_seconds{{{expected_labels}}} 170000.0"
+        in metrics
+    )
+    assert (
+        f"azure_managed_lustre_ost_operation_sample_timestamp_seconds{{{operation_labels}}}"
+        " 170010.0" in metrics
+    )
+    assert (
+        f"azure_managed_lustre_mdt_sample_timestamp_seconds{{{mdt_labels}}} 170020.0"
+        in metrics
+    )
+    assert (
+        f"azure_managed_lustre_mdt_operation_sample_timestamp_seconds"
+        f"{{{mdt_operation_labels}}} 170030.0" in metrics
+    )
+
+
+def test_lustre_missing_sample_timestamps_do_not_reset_freshness_gauges() -> None:
+    registry = CollectorRegistry()
+    fresh_lustre = ManagedLustreCollectionResult(
+        metrics=(
+            ManagedLustreOstMetric(
+                "sub-a", "rg-a", "lustre-a", "westus3", "0", 100.0,
+                sample_timestamp_seconds=170000.0,
+            ),
+        ),
+        filesystem_count=1,
+        operation_metrics=(
+            ManagedLustreOstOperationMetric(
+                "sub-a", "rg-a", "lustre-a", "westus3", "0", "read",
+                sample_timestamp_seconds=170000.0,
+            ),
+        ),
+        mdt_metrics=(
+            ManagedLustreMdtMetric(
+                "sub-a", "rg-a", "lustre-a", "westus3", "0",
+                sample_timestamp_seconds=170000.0,
+            ),
+        ),
+        mdt_operation_metrics=(
+            ManagedLustreMdtOperationMetric(
+                "sub-a", "rg-a", "lustre-a", "westus3", "0", "open",
+                sample_timestamp_seconds=170000.0,
+            ),
+        ),
+    )
+    stale_lustre = ManagedLustreCollectionResult(
+        metrics=(
+            ManagedLustreOstMetric(
+                "sub-a", "rg-a", "lustre-a", "westus3", "0", 110.0,
+            ),
+        ),
+        filesystem_count=1,
+        operation_metrics=(
+            ManagedLustreOstOperationMetric(
+                "sub-a", "rg-a", "lustre-a", "westus3", "0", "read",
+            ),
+        ),
+        mdt_metrics=(
+            ManagedLustreMdtMetric(
+                "sub-a", "rg-a", "lustre-a", "westus3", "0",
+            ),
+        ),
+        mdt_operation_metrics=(
+            ManagedLustreMdtOperationMetric(
+                "sub-a", "rg-a", "lustre-a", "westus3", "0", "open",
+            ),
+        ),
+    )
+    calls = iter([fresh_lustre, stale_lustre])
+    exporter = VmssMetricsExporter(
+        lambda: [],
+        collect_lustre_metrics=lambda: next(calls),
+        registry=registry,
+    )
+
+    exporter.collect_lustre_once()
+    exporter.collect_lustre_once()
+
+    metrics = generate_latest(registry).decode()
+    ost_labels = (
+        'filesystem_name="lustre-a",location="westus3",ostnum="0",'
+        'resource_group="rg-a",subscription_id="sub-a"'
+    )
+    ost_operation_labels = (
+        'filesystem_name="lustre-a",location="westus3",operation="read",ostnum="0",'
+        'resource_group="rg-a",subscription_id="sub-a"'
+    )
+    mdt_labels = (
+        'filesystem_name="lustre-a",location="westus3",mdtnum="0",'
+        'resource_group="rg-a",subscription_id="sub-a"'
+    )
+    mdt_operation_labels = (
+        'filesystem_name="lustre-a",location="westus3",mdtnum="0",operation="open",'
+        'resource_group="rg-a",subscription_id="sub-a"'
+    )
+    # The second collection had no Azure Monitor timestamps. The previous
+    # timestamp must remain in place so the staleness alert can age out
+    # naturally instead of being silently reset by the exporter wall clock.
+    assert (
+        f"azure_managed_lustre_ost_sample_timestamp_seconds{{{ost_labels}}} 170000.0"
+        in metrics
+    )
+    assert (
+        f"azure_managed_lustre_ost_operation_sample_timestamp_seconds"
+        f"{{{ost_operation_labels}}} 170000.0" in metrics
+    )
+    assert (
+        f"azure_managed_lustre_mdt_sample_timestamp_seconds{{{mdt_labels}}} 170000.0"
+        in metrics
+    )
+    assert (
+        f"azure_managed_lustre_mdt_operation_sample_timestamp_seconds"
+        f"{{{mdt_operation_labels}}} 170000.0" in metrics
+    )
 
 
 def test_lustre_partial_failure_keeps_existing_series() -> None:

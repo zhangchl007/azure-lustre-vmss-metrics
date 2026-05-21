@@ -931,9 +931,16 @@ class VmssMetricsExporter:
                     metric.label_values,
                     metric.connected_clients,
                 )
-                self.lustre_ost_sample_timestamp.labels(*metric.label_values).set(
-                    metric.sample_timestamp_seconds or time.time()
-                )
+                # Only stamp the freshness gauge with the actual Azure Monitor sample
+                # timestamp. Falling back to ``time.time()`` would silently reset the
+                # freshness counter and defeat the ``*_sample_timestamp_seconds``
+                # staleness alerts whenever Azure Monitor returned data without a
+                # timestamp. Leaving the prior value in place lets the alert age out
+                # naturally on real sample drops.
+                if metric.sample_timestamp_seconds is not None:
+                    self.lustre_ost_sample_timestamp.labels(*metric.label_values).set(
+                        metric.sample_timestamp_seconds
+                    )
 
             for metric in operation_metrics:
                 self._set_or_remove_lustre_gauge(
@@ -946,9 +953,10 @@ class VmssMetricsExporter:
                     metric.label_values,
                     metric.client_ops,
                 )
-                self.lustre_ost_operation_sample_timestamp.labels(*metric.label_values).set(
-                    metric.sample_timestamp_seconds or time.time()
-                )
+                if metric.sample_timestamp_seconds is not None:
+                    self.lustre_ost_operation_sample_timestamp.labels(
+                        *metric.label_values
+                    ).set(metric.sample_timestamp_seconds)
 
             for metric in mdt_metrics:
                 self._set_or_remove_lustre_gauge(
@@ -1016,9 +1024,10 @@ class VmssMetricsExporter:
                     metric.label_values,
                     metric.connected_clients,
                 )
-                self.lustre_mdt_sample_timestamp.labels(*metric.label_values).set(
-                    metric.sample_timestamp_seconds or time.time()
-                )
+                if metric.sample_timestamp_seconds is not None:
+                    self.lustre_mdt_sample_timestamp.labels(*metric.label_values).set(
+                        metric.sample_timestamp_seconds
+                    )
 
             for metric in mdt_operation_metrics:
                 self._set_or_remove_lustre_gauge(
@@ -1031,9 +1040,10 @@ class VmssMetricsExporter:
                     metric.label_values,
                     metric.client_ops,
                 )
-                self.lustre_mdt_operation_sample_timestamp.labels(*metric.label_values).set(
-                    metric.sample_timestamp_seconds or time.time()
-                )
+                if metric.sample_timestamp_seconds is not None:
+                    self.lustre_mdt_operation_sample_timestamp.labels(
+                        *metric.label_values
+                    ).set(metric.sample_timestamp_seconds)
 
             if remove_stale:
                 self._active_lustre_filesystem_info_labelsets = new_filesystem_info_labelsets
