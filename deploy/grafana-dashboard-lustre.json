@@ -548,18 +548,17 @@
       "options": {"legend": {"displayMode": "table", "placement": "bottom", "showLegend": true, "calcs": ["lastNotNull", "max"]}, "tooltip": {"mode": "multi", "sort": "desc"}}
     },
     {
-      "type": "table",
+      "type": "timeseries",
       "id": 118,
-      "title": "Per-filesystem sample age",
-      "description": "Derived per-filesystem Azure Monitor sample age from the exporter. Filesystems with no OST/MDT samples remain visible in the inventory table but do not have a derived sample-age row.",
+      "title": "Filesystem sample age trend",
+      "description": "Top-N filesystems by derived Azure Monitor sample age from the exporter. Filesystems with no OST/MDT samples remain visible in the inventory table but do not have a derived sample-age series.",
       "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
       "gridPos": {"h": 8, "w": 12, "x": 12, "y": 80},
       "targets": [
-        {"expr": "max by (subscription_id, resource_group, filesystem_name, location) (azure_managed_lustre_filesystem_sample_max_age_seconds{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", filesystem_name=~\"$filesystem_name\", location=~\"$location\"})", "legendFormat": "{{filesystem_name}}", "refId": "A", "format": "table", "instant": true}
+        {"expr": "topk($top_n, max by (filesystem_name) (azure_managed_lustre_filesystem_sample_max_age_seconds{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", filesystem_name=~\"$filesystem_name\", location=~\"$location\"}))", "legendFormat": "{{filesystem_name}}", "refId": "A"}
       ],
-      "fieldConfig": {"defaults": {"unit": "s", "decimals": 0, "custom": {"align": "auto", "cellOptions": {"type": "auto"}, "inspect": false}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "orange", "value": 180}, {"color": "red", "value": 300}]}}, "overrides": []},
-      "options": {"showHeader": true, "cellHeight": "sm", "footer": {"show": false, "reducer": ["max"], "countRows": false, "fields": ""}},
-      "pluginVersion": "10.4.0"
+      "fieldConfig": {"defaults": {"unit": "s", "decimals": 0, "min": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "orange", "value": 180}, {"color": "red", "value": 300}]}, "custom": {"drawStyle": "line", "lineInterpolation": "stepAfter", "lineWidth": 2, "fillOpacity": 10, "showPoints": "never", "spanNulls": true, "stacking": {"mode": "none", "group": "A"}}}, "overrides": []},
+      "options": {"legend": {"displayMode": "table", "placement": "bottom", "showLegend": true, "calcs": ["lastNotNull", "max"]}, "tooltip": {"mode": "multi", "sort": "desc"}}
     }
   ],
   "refresh": "1m",
