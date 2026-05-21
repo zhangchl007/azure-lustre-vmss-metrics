@@ -204,11 +204,28 @@ rather than OST throughput issues.
 
 ### Recommended Derived Metric
 
+Prefer this repo's exported per-filesystem gauge when available:
+
 ```
-sum(azure_managed_lustre_mdt_client_ops) / clamp_min(sum(azure_managed_lustre_client_read_ops + azure_managed_lustre_client_write_ops), 1)
+azure_managed_lustre_metadata_amplification_ratio
 ```
 
-(Use this repo's exporter metric names; replace `clamp_min(...,1)` with whatever you use to avoid divide-by-zero.)
+If you need to derive the ratio in PromQL, aggregate each side to the same filesystem label set before dividing:
+
+```
+sum by (subscription_id, resource_group, filesystem_name, location) (
+	azure_managed_lustre_mdt_client_ops
+)
+/
+clamp_min(
+	sum by (subscription_id, resource_group, filesystem_name, location) (
+		azure_managed_lustre_client_read_ops + azure_managed_lustre_client_write_ops
+	),
+	1
+)
+```
+
+Do **not** wrap these Azure Monitor-derived series in `rate()`: they are already per-sample 1-minute average gauges, not monotonically increasing counters. Replace `clamp_min(..., 1)` only if your Prometheus-compatible backend uses a different divide-by-zero guard.
 
 ### High Ratio Indicates
 
@@ -405,6 +422,20 @@ None of these come from AMLFS Azure Monitor or from this repo's exporter; deploy
 
 ---
 
+## 6.1 CSI Metrics Guidance
+
+The Azure Lustre CSI driver is the best source for mount-path health. At minimum, scrape the `csi-azurelustre-node` metrics endpoint and dashboard these views:
+
+| Signal | Example PromQL | Why it matters |
+|---|---|---|
+| Mount operation rate | `sum by (grpc_method, grpc_status_code) (rate(csi_operations_seconds_count{grpc_method=~"NodePublishVolume|NodeUnpublishVolume"}[5m]))` | Separates normal pod churn from mount storms and remount loops. |
+| Mount latency | `histogram_quantile(0.95, sum by (le, grpc_method) (rate(csi_operations_seconds_bucket{grpc_method="NodePublishVolume"}[5m])))` | Detects slow mounts before application pods report I/O hangs. |
+| Mount errors | `sum by (grpc_status_code) (rate(csi_operations_seconds_count{grpc_method="NodePublishVolume",grpc_status_code!="OK"}[5m]))` | Surfaces CSI failures that do not appear in AMLFS Azure Monitor metrics. |
+
+If the deployed CSI image does not expose `csi_operations_seconds`, fall back to `csi-azurelustre-node` logs and Kubernetes events, but treat that as a temporary visibility gap rather than a steady-state design.
+
+---
+
 ## 6.2 Avoid Mount Explosion
 
 Large CSI environments may create:
@@ -586,7 +617,32 @@ Recommended:
 - PVC count per node
 - pod churn
 - remount frequency
+- CSI `NodePublishVolume` latency and error rate (`csi_operations_seconds`)
 - node drain events
+
+---
+
+## Alert ↔ Doc Threshold Map
+
+Use this table to verify that the production thresholds in this document are represented by concrete Prometheus rules in `deploy/lustre-alert-rules.yaml`.
+
+| Doc reference | Operational threshold | Prometheus alert rule |
+|---|---|---|
+| Exporter freshness | No successful Managed Lustre collection for >180s | `AzureManagedLustreCollectorStale` |
+| Azure Monitor sample freshness | OST sample age >300s | `AzureManagedLustreSampleStale` |
+| Azure Monitor sample freshness | MDT sample age >300s | `AzureManagedLustreMdtSampleStale` |
+| Collector reliability | Collection errors observed over 5m | `AzureManagedLustreCollectionErrors` |
+| §2.1 / §9.1 OST capacity | OST available <10% / <5% | `AzureManagedLustreOstAvailablePercentLow`, `AzureManagedLustreOstAvailablePercentCritical` |
+| §2.1 / §9.1 OST capacity | OST available <1 TiB / <100 GiB | `AzureManagedLustreOstBytesAvailableLow`, `AzureManagedLustreOstBytesAvailableCritical` |
+| §9.1 OST safety boundary | OST used >75% / >80% | `AzureManagedLustreOstUsedPercentWarn`, `AzureManagedLustreOstUsedPercentCritical` |
+| §2.2 MDT byte usage | MDT bytes used >75% / >90% | `AzureManagedLustreMdtBytesUsedPercentWarn`, `AzureManagedLustreMdtBytesUsedPercentCritical` |
+| §2.2 MDT inode usage | MDT inodes used >70% / >85% | `AzureManagedLustreMdtInodeUsedPercentWarn`, `AzureManagedLustreMdtInodeUsedPercentCritical` |
+| §3.1 MDT sampled latency | MDT latency >100ms / >500ms / >1000ms | `AzureManagedLustreMdtLatencyWarn`, `AzureManagedLustreMdtLatencySerious`, `AzureManagedLustreMdtLatencyHang` |
+| §3.3 HSM reliability | HSM action errors >0 | `AzureManagedLustreHsmActionErrors` |
+| §3.3 HSM backlog | HSM in-flight requests >100 / >500 | `AzureManagedLustreHsmBacklog`, `AzureManagedLustreHsmBacklogCritical` |
+| Exporter HA | No leader elected for >2m | `AzureManagedLustreExporterNoLeader` |
+
+The LNet and D-state signals in §5 and §7 are client-side metrics and are not emitted by Azure Monitor. See [Appendix A](#a-lnet--d-state-textfile-collector-daemonset-sketch) for the textfile-collector ingestion sketch.
 
 ---
 
