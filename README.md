@@ -14,41 +14,6 @@ The exporter discovers resources with Azure Resource Graph, reads Managed Lustre
 - Support local Azure CLI auth, Service Principal auth, Managed Identity, and AKS Workload Identity.
 - Optional Kubernetes leader election for HA deployments.
 
-## Project layout
-
-```text
-.
-├── Dockerfile
-├── Makefile
-├── pyproject.toml
-├── deploy/
-│   ├── ama-metrics-settings-configmap-v1.yaml   # Azure Monitor managed Prometheus scrape config
-│   ├── grafana-dashboard-lustre.json
-│   ├── grafana-dashboard-vmss.json
-│   ├── kubernetes.yaml                          # Deployment, Service, RBAC, optional WI binding
-│   ├── lustre-alert-rules.yaml                  # Prometheus alert rules for the Lustre signals
-│   └── pressure-test/                           # AV simulation Jobs, PVC example, RBAC, kustomization
-├── docs/
-│   ├── azure-managed-lustre-production-best-practices-v2.md
-│   └── lustre-pressure-test.md                  # Pressure-test runbook (single source of truth)
-├── scripts/
-│   ├── av_lustre_workload.py                    # AV simulator (discover / read-only / read-write-output / verify-output)
-│   ├── av_pressure_phase.sh                     # Single-phase driver
-│   ├── av_pressure_all_phases.sh                # Full phase-ladder driver
-│   └── lustre_safe_write_budget.py              # Pre-phase capacity / write-budget calculator
-├── src/vmss_metrics_exporter/
-│   ├── azure_managed_lustre.py
-│   ├── azure_resource_graph.py
-│   ├── collector.py
-│   ├── config.py
-│   ├── credentials.py
-│   ├── leader_election.py
-│   ├── main.py
-│   └── models.py
-├── reports/                                     # Per-run pressure-test summaries (jsonl, tsv, md)
-└── tests/
-```
-
 ## Metrics
 
 ### VMSS metrics
