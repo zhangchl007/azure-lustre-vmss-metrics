@@ -414,6 +414,29 @@ def test_refresh_api_key_hook_keeps_bearer_token_key_in_sync() -> None:
     assert config.api_key["BearerToken"] == "Bearer refreshed-token"
 
 
+def test_refresh_api_key_hook_reinstalls_wrapper_after_incluster_refresh() -> None:
+    class Config:
+        api_key = {"authorization": "Bearer old-token", "BearerToken": "Bearer old-token"}
+
+        def _raw_refresh(self, config: object) -> None:
+            self.api_key["authorization"] = "bearer refreshed-token"
+            config.refresh_api_key_hook = self._raw_refresh
+
+        refresh_api_key_hook = _raw_refresh
+
+    config = Config()
+    _wrap_refresh_api_key_hook(config)
+
+    config.refresh_api_key_hook(config)
+    first_hook = config.refresh_api_key_hook
+    config.api_key["authorization"] = "bearer second-token"
+    config.refresh_api_key_hook(config)
+
+    assert config.refresh_api_key_hook is first_hook
+    assert config.api_key["authorization"] == "Bearer refreshed-token"
+    assert config.api_key["BearerToken"] == "Bearer refreshed-token"
+
+
 def test_runner_invokes_callbacks_on_leadership_change() -> None:
     started: list[int] = []
     stopped: list[int] = []

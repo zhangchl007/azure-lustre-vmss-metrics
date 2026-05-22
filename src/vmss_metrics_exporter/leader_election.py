@@ -596,6 +596,12 @@ def _wrap_refresh_api_key_hook(configuration: object) -> None:
     def wrapped_refresh_api_key_hook(config: object) -> None:
         refresh_api_key_hook(config)
         _normalize_bearer_token_scheme(config)
+        # The Kubernetes in-cluster refresh hook calls its private _set_config(),
+        # which reassigns ``config.refresh_api_key_hook`` back to the original
+        # raw hook. Reinstall this wrapper after every refresh so future service
+        # account token rotations keep the generated ``BearerToken`` auth key in
+        # sync with the refreshed ``authorization`` token.
+        config.refresh_api_key_hook = wrapped_refresh_api_key_hook
 
     configuration.refresh_api_key_hook = wrapped_refresh_api_key_hook
 
