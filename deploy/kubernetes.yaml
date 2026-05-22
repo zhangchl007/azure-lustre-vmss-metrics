@@ -107,7 +107,7 @@ spec:
         app.kubernetes.io/name: vmss-metrics-exporter
     spec:
       serviceAccountName: vmss-metrics-exporter
-      terminationGracePeriodSeconds: 30
+      terminationGracePeriodSeconds: 45
       affinity:
         # Prefer to spread replicas across nodes for HA; do not require
         # it so the deployment still schedules on single-node clusters.
@@ -121,7 +121,7 @@ spec:
                     app.kubernetes.io/name: vmss-metrics-exporter
       containers:
         - name: exporter
-          image: zhangchl007/vmss-metrics-exporter:v23-tokenfix
+          image: zhangchl007/vmss-metrics-exporter:v24-rollout-drain
           imagePullPolicy: IfNotPresent
           ports:
             - name: metrics
@@ -165,6 +165,13 @@ spec:
               value: "8000"
             - name: LOG_LEVEL
               value: "INFO"
+            # On graceful rollout shutdown, release the Lease immediately but
+            # keep the old leader's HTTP server alive with cached metrics long
+            # enough for the new leader to acquire, collect, label itself, and
+            # enter Service endpoints. This trades a brief overlap of valid
+            # cached metrics for no successful scrape returning blank/zero data.
+            - name: SHUTDOWN_DRAIN_SECONDS
+              value: "15"
             - name: ENABLE_MANAGED_LUSTRE_METRICS
               value: "true"
             - name: LUSTRE_POLL_INTERVAL_SECONDS

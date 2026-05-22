@@ -36,6 +36,7 @@ class Settings:
     leader_election_lease_duration_seconds: int = 15
     leader_election_renew_deadline_seconds: int = 10
     leader_election_retry_period_seconds: int = 2
+    shutdown_drain_seconds: float = 0.0
 
 
 def load_settings(*, require_subscription_ids: bool = True) -> Settings:
@@ -80,6 +81,9 @@ def load_settings(*, require_subscription_ids: bool = True) -> Settings:
         ),
         lustre_metrics_request_jitter_seconds=_get_float(
             "LUSTRE_METRICS_REQUEST_JITTER_SECONDS", default=0.5, minimum=0.0, maximum=60.0
+        ),
+        shutdown_drain_seconds=_get_float(
+            "SHUTDOWN_DRAIN_SECONDS", default=0.0, minimum=0.0, maximum=120.0
         ),
         **_load_leader_election_settings(),
     )

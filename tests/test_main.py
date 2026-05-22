@@ -229,3 +229,25 @@ def test_stopped_leading_removes_service_endpoint_before_clearing_metrics(monkey
     )
 
     assert calls == ["label:False", "set_leader:False"]
+
+
+def test_shutdown_drain_sleeps_for_configured_window(monkeypatch) -> None:
+    sleeps: list[float] = []
+    monkeypatch.setattr(main_module.time, "sleep", lambda seconds: sleeps.append(seconds))
+
+    main_module._drain_after_leader_release(
+        Settings(subscription_ids=("sub-a",), shutdown_drain_seconds=12.5)
+    )
+
+    assert sleeps == [12.5]
+
+
+def test_shutdown_drain_is_skipped_when_disabled(monkeypatch) -> None:
+    sleeps: list[float] = []
+    monkeypatch.setattr(main_module.time, "sleep", lambda seconds: sleeps.append(seconds))
+
+    main_module._drain_after_leader_release(
+        Settings(subscription_ids=("sub-a",), shutdown_drain_seconds=0.0)
+    )
+
+    assert sleeps == []

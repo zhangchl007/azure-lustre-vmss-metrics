@@ -23,6 +23,7 @@ def test_load_settings_parses_subscriptions_and_deduplicates(
     assert settings.lustre_metrics_interval == "PT1M"
     assert settings.lustre_metrics_max_workers == 4
     assert settings.lustre_metrics_request_jitter_seconds == 0.5
+    assert settings.shutdown_drain_seconds == 0.0
 
 
 def test_placeholder_subscription_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -67,6 +68,15 @@ def test_lustre_boolean_setting_rejects_invalid_value(
 
     with pytest.raises(ValueError, match="ENABLE_MANAGED_LUSTRE_METRICS"):
         load_settings()
+
+
+def test_shutdown_drain_seconds_can_be_overridden(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AZURE_SUBSCRIPTION_IDS", "sub-a")
+    monkeypatch.setenv("SHUTDOWN_DRAIN_SECONDS", "12.5")
+
+    settings = load_settings()
+
+    assert settings.shutdown_drain_seconds == 12.5
 
 
 def test_leader_election_defaults_off(monkeypatch: pytest.MonkeyPatch) -> None:

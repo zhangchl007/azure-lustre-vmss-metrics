@@ -7,6 +7,7 @@ import logging
 import signal
 import sys
 import threading
+import time
 from contextlib import suppress
 
 from prometheus_client import start_http_server
@@ -52,6 +53,8 @@ def main(argv: list[str] | None = None) -> int:
     metrics_query_client: MetricsQueryClientProtocol | None = None
     exporter: VmssMetricsExporter | None = None
     leader_election_runner: LeaderElectionRunner | None = None
+    settings: Settings | None = None
+    shutdown_requested = False
     try:
         settings = load_settings(require_subscription_ids=True)
         _configure_logging(settings.log_level)
@@ -101,6 +104,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         exporter.start()
         _wait_for_shutdown_signal()
+        shutdown_requested = True
         return 0
     except KeyboardInterrupt:
         return 130
@@ -112,6 +116,8 @@ def main(argv: list[str] | None = None) -> int:
         if leader_election_runner is not None:
             with suppress(Exception):
                 leader_election_runner.release(notify_stopped=False)
+        if shutdown_requested and settings is not None:
+            _drain_after_leader_release(settings)
         if exporter is not None:
             with suppress(Exception):
                 exporter.stop()
@@ -242,6 +248,26 @@ def _patch_pod_leader_label(settings: Settings, *, is_leader: bool) -> None:
             settings.leader_election_namespace,
             settings.leader_election_identity,
         )
+
+
+def _drain_after_leader_release(settings: Settings) -> None:
+    """Keep serving cached metrics briefly after graceful Lease release.
+
+    During a rolling update, the outgoing leader releases the Lease so a new
+    pod can acquire immediately, but it should not exit the HTTP server in the
+    same instant. Keeping the old process alive for a short drain window lets
+    Kubernetes endpoint propagation and the new leader's first collection
+    overlap, so successful Service scrapes keep seeing non-empty cached metrics
+    instead of a transient no-endpoint or closed-connection gap.
+    """
+
+    if settings.shutdown_drain_seconds <= 0:
+        return
+    LOGGER.info(
+        "Released leader-election Lease; continuing to serve cached metrics for %.1fs",
+        settings.shutdown_drain_seconds,
+    )
+    time.sleep(settings.shutdown_drain_seconds)
 
 
 def _configure_logging(level_name: str) -> None:

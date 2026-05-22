@@ -11,24 +11,15 @@ data:
       - job_name: azure_metrics_vmss
         scheme: http
         metrics_path: /metrics
-        kubernetes_sd_configs:
-          - role: pod
-        relabel_configs:
-          # Keep only vmss-metrics-exporter pods in the default namespace.
-          - source_labels: [__meta_kubernetes_namespace]
-            action: keep
-            regex: default
-          - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name]
-            action: keep
-            regex: vmss-metrics-exporter
-          # Keep only the container port named "metrics".
-          - source_labels: [__meta_kubernetes_pod_container_port_name]
-            action: keep
-            regex: metrics
-          # Surface useful labels for PromQL.
-          - source_labels: [__meta_kubernetes_namespace]
-            target_label: namespace
-          - source_labels: [__meta_kubernetes_pod_name]
-            target_label: pod
-          - source_labels: [__meta_kubernetes_pod_node_name]
-            target_label: node
+        # Scrape the stable Kubernetes Service name, not individual exporter
+        # pods. The Service selector already points only at the service-ready
+        # leader pod (`vmss-metrics-exporter-leader=true`). Pod discovery adds
+        # `pod`/endpoint identity labels and creates new time series on every
+        # rollout, which shows up as Grafana gaps even when the Service itself
+        # continuously returns valid metrics.
+        static_configs:
+          - targets:
+              - vmss-metrics-exporter.default.svc.cluster.local:8000
+            labels:
+              namespace: default
+              service: vmss-metrics-exporter
