@@ -22,19 +22,30 @@ The exporter discovers resources with Azure Resource Graph, reads Managed Lustre
 ├── Makefile
 ├── pyproject.toml
 ├── deploy/
-│   ├── ama-metrics-settings-configmap-v1.yaml
+│   ├── ama-metrics-settings-configmap-v1.yaml   # Azure Monitor managed Prometheus scrape config
 │   ├── grafana-dashboard-lustre.json
 │   ├── grafana-dashboard-vmss.json
-│   ├── kubernetes.yaml
-│   └── lustre-alert-rules.yaml
+│   ├── kubernetes.yaml                          # Deployment, Service, RBAC, optional WI binding
+│   ├── lustre-alert-rules.yaml                  # Prometheus alert rules for the Lustre signals
+│   └── pressure-test/                           # AV simulation Jobs, PVC example, RBAC, kustomization
+├── docs/
+│   ├── azure-managed-lustre-production-best-practices-v2.md
+│   └── lustre-pressure-test.md                  # Pressure-test runbook (single source of truth)
+├── scripts/
+│   ├── av_lustre_workload.py                    # AV simulator (discover / read-only / read-write-output / verify-output)
+│   ├── av_pressure_phase.sh                     # Single-phase driver
+│   ├── av_pressure_all_phases.sh                # Full phase-ladder driver
+│   └── lustre_safe_write_budget.py              # Pre-phase capacity / write-budget calculator
 ├── src/vmss_metrics_exporter/
 │   ├── azure_managed_lustre.py
 │   ├── azure_resource_graph.py
 │   ├── collector.py
 │   ├── config.py
 │   ├── credentials.py
+│   ├── leader_election.py
 │   ├── main.py
 │   └── models.py
+├── reports/                                     # Per-run pressure-test summaries (jsonl, tsv, md)
 └── tests/
 ```
 
@@ -193,10 +204,32 @@ make port-forward
 
 Import the dashboards from `deploy/`:
 
-- `deploy/grafana-dashboard-vmss.json`
-- `deploy/grafana-dashboard-lustre.json`
+- [deploy/grafana-dashboard-vmss.json](deploy/grafana-dashboard-vmss.json)
+- [deploy/grafana-dashboard-lustre.json](deploy/grafana-dashboard-lustre.json)
 
 The Managed Lustre dashboard uses filesystem inventory metrics for dropdowns, so discovered filesystems remain visible even when Azure Monitor has no current OST or MDT sample for a filesystem.
+
+## Prometheus alert rules
+
+[deploy/lustre-alert-rules.yaml](deploy/lustre-alert-rules.yaml) ships ready-to-use alert rules for the Managed Lustre signals, including:
+
+- `AzureManagedLustreCollectorStale` — collection has not completed recently.
+- `AzureManagedLustreSampleStale` — per-OST Azure Monitor sample is stale.
+- `AzureManagedLustreCollectionErrors` — non-zero collection error rate.
+- `AzureManagedLustreOstAvailablePercentLow` — OST available capacity below threshold.
+
+Apply with `kubectl apply -f deploy/lustre-alert-rules.yaml` against your Prometheus operator namespace, or import the group into your alert manager of choice.
+
+## Azure Monitor managed Prometheus
+
+If you are scraping the exporter from Azure Monitor managed Prometheus, the
+[deploy/ama-metrics-settings-configmap-v1.yaml](deploy/ama-metrics-settings-configmap-v1.yaml)
+ConfigMap (namespace `kube-system`) enables custom pod scrape so the exporter
+Pod is picked up by the AMA agent. Apply it once per cluster:
+
+```bash
+kubectl apply -f deploy/ama-metrics-settings-configmap-v1.yaml
+```
 
 ## Prometheus examples
 
@@ -226,11 +259,59 @@ time() - azure_managed_lustre_last_success_timestamp_seconds
 rate(azure_managed_lustre_collection_errors_total[5m])
 ```
 
+## High availability
+
+When running more than one replica, enable Kubernetes leader election so only one Pod actively queries Azure Resource Graph and Azure Monitor:
+
+```yaml
+env:
+  - name: LEADER_ELECTION_ENABLED
+    value: "true"
+  - name: LEADER_ELECTION_LOCK_NAME
+    value: vmss-metrics-exporter
+  - name: LEADER_ELECTION_NAMESPACE
+    valueFrom:
+      fieldRef:
+        fieldPath: metadata.namespace
+```
+
+The leader holds a `coordination.k8s.io/Lease`; standby replicas keep `/metrics` served but skip collection until they win the lease. RBAC for the lease is in [deploy/kubernetes.yaml](deploy/kubernetes.yaml).
+
+## Pressure testing Azure Managed Lustre
+
+The `scripts/` and `deploy/pressure-test/` directories contain an AV-simulation
+workload used to validate Azure Managed Lustre throughput, tail latency, and
+stability from AKS:
+
+- [scripts/av_lustre_workload.py](scripts/av_lustre_workload.py) — simulator with four modes: `discover`, `read-only`, `read-write-output`, `verify-output`. Enforces three immutability guardrails on the source dataset.
+- [scripts/av_pressure_phase.sh](scripts/av_pressure_phase.sh) — drives a single phase (smoke, ramp-N, hotset, metadata-heavy, heavy-write, soak) and collects per-pod summaries.
+- [scripts/av_pressure_all_phases.sh](scripts/av_pressure_all_phases.sh) — runs the full phase ladder end-to-end.
+- [scripts/lustre_safe_write_budget.py](scripts/lustre_safe_write_budget.py) — pre-phase capacity / write-budget calculator (default policy: stop before 80 % used).
+- [deploy/pressure-test/](deploy/pressure-test/) — Job manifests, PVC example, Azure Lustre CSI node RBAC, and the workload ConfigMap.
+
+The full procedure, safety rules, and pass/fail criteria live in
+[docs/lustre-pressure-test.md](docs/lustre-pressure-test.md). Production tuning
+guidance is in
+[docs/azure-managed-lustre-production-best-practices-v2.md](docs/azure-managed-lustre-production-best-practices-v2.md).
+
+> Do not run any phase except `discover` against a shared production filesystem
+> without prior approval and a documented rollback window. The dataset root is
+> read-only; all writes are confined to `RESULT_ROOT/<RUN_ID>/<pod-name>/`.
+
 ## Development
 
+This repository ships an existing virtualenv at `.venv/`. Activate it before
+running local validation:
+
 ```bash
-make install
-make test
-make lint
-make validate
+source .venv/bin/activate
+
+make install   # editable install with dev extras
+make test      # pytest -q
+make lint      # ruff check .
+make validate  # test + lint
 ```
+
+Prefer the `Makefile` targets over ad-hoc commands. For small changes, run
+targeted tests first (for example `pytest tests/test_collector.py -q`) and then
+`make validate` once before opening a PR.
