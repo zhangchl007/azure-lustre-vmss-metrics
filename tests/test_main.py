@@ -67,6 +67,18 @@ class _FakeLustreCollector:
         return ManagedLustreCollectionResult(metrics=(), filesystem_count=0)
 
 
+class _FakeExporterCallbacks:
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    def set_leader(self, is_leader: bool) -> None:
+        self.calls.append(f"set_leader:{is_leader}")
+
+    def collect_once(self) -> list[object]:
+        self.calls.append("collect_once")
+        return []
+
+
 def _install_common_main_fakes(monkeypatch) -> tuple[
     _FakeCredential,
     _FakeResourceGraphClient,
@@ -170,3 +182,50 @@ def test_main_closes_shared_credential_when_startup_fails(monkeypatch) -> None:
     assert resource_graph_client.close_calls == 1
     assert metrics_query_client.close_calls == 0
     assert credential.close_calls == 1
+
+
+def test_started_leading_populates_metrics_before_labeling_service_endpoint(monkeypatch) -> None:
+    exporter = _FakeExporterCallbacks()
+    label_calls: list[bool] = []
+    monkeypatch.setattr(
+        main_module,
+        "_patch_pod_leader_label",
+        lambda _settings, *, is_leader: label_calls.append(is_leader),
+    )
+
+    main_module._on_started_leading(
+        Settings(
+            subscription_ids=("sub-a",),
+            leader_election_identity="pod-a",
+            leader_election_namespace="default",
+        ),
+        exporter,  # type: ignore[arg-type]
+    )
+
+    assert exporter.calls == ["set_leader:True", "collect_once"]
+    assert label_calls == [True]
+
+
+def test_stopped_leading_removes_service_endpoint_before_clearing_metrics(monkeypatch) -> None:
+    exporter = _FakeExporterCallbacks()
+    calls: list[str] = []
+
+    def fake_patch(_settings: object, *, is_leader: bool) -> None:
+        calls.append(f"label:{is_leader}")
+
+    def fake_set_leader(is_leader: bool) -> None:
+        calls.append(f"set_leader:{is_leader}")
+
+    exporter.set_leader = fake_set_leader  # type: ignore[method-assign]
+    monkeypatch.setattr(main_module, "_patch_pod_leader_label", fake_patch)
+
+    main_module._on_stopped_leading(
+        Settings(
+            subscription_ids=("sub-a",),
+            leader_election_identity="pod-a",
+            leader_election_namespace="default",
+        ),
+        exporter,  # type: ignore[arg-type]
+    )
+
+    assert calls == ["label:False", "set_leader:False"]

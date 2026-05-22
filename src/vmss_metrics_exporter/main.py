@@ -33,6 +33,7 @@ from .leader_election import (
 )
 
 LOGGER = logging.getLogger(__name__)
+LEADER_SERVICE_LABEL = "vmss-metrics-exporter-leader"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -110,7 +111,7 @@ def main(argv: list[str] | None = None) -> int:
     finally:
         if leader_election_runner is not None:
             with suppress(Exception):
-                leader_election_runner.release()
+                leader_election_runner.release(notify_stopped=False)
         if exporter is not None:
             with suppress(Exception):
                 exporter.stop()
@@ -172,8 +173,8 @@ def _start_leader_election(
     )
     runner = LeaderElectionRunner(
         config,
-        on_started_leading=lambda: exporter.set_leader(True),
-        on_stopped_leading=lambda: exporter.set_leader(False),
+        on_started_leading=lambda: _on_started_leading(settings, exporter),
+        on_stopped_leading=lambda: _on_stopped_leading(settings, exporter),
     )
     thread = threading.Thread(
         target=runner.run_forever,
@@ -191,6 +192,56 @@ def _start_leader_election(
         config.retry_period_seconds,
     )
     return runner
+
+
+def _on_started_leading(settings: Settings, exporter: VmssMetricsExporter) -> None:
+    """Promote this pod and make it eligible for Service traffic.
+
+    The Kubernetes Service is intentionally scoped to the leader pod so a
+    Service-based scraper never randomly hits an idle follower with zero
+    resource series. Populate gauges once before adding the leader label; that
+    avoids a short Service-visible blank window on a newly promoted pod.
+    """
+
+    exporter.set_leader(True)
+    with suppress(Exception):
+        exporter.collect_once()
+    _patch_pod_leader_label(settings, is_leader=True)
+
+
+def _on_stopped_leading(settings: Settings, exporter: VmssMetricsExporter) -> None:
+    """Demote this pod and remove it from leader-only Service endpoints."""
+
+    _patch_pod_leader_label(settings, is_leader=False)
+    exporter.set_leader(False)
+
+
+def _patch_pod_leader_label(settings: Settings, *, is_leader: bool) -> None:
+    """Best-effort patch of this pod's leader Service selector label."""
+
+    try:
+        from kubernetes import client
+
+        client.CoreV1Api().patch_namespaced_pod(
+            name=settings.leader_election_identity,
+            namespace=settings.leader_election_namespace,
+            body={
+                "metadata": {
+                    "labels": {
+                        LEADER_SERVICE_LABEL: "true" if is_leader else None,
+                    },
+                },
+            },
+            _content_type="application/merge-patch+json",
+        )
+    except Exception:  # noqa: BLE001 - label updates must not break election callbacks
+        LOGGER.exception(
+            "Failed to patch pod leader label %s=%s on %s/%s; suppressed",
+            LEADER_SERVICE_LABEL,
+            "true" if is_leader else "<removed>",
+            settings.leader_election_namespace,
+            settings.leader_election_identity,
+        )
 
 
 def _configure_logging(level_name: str) -> None:

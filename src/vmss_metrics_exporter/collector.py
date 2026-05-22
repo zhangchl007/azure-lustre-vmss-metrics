@@ -103,6 +103,13 @@ class VmssMetricsExporter:
         self._is_leader_event = threading.Event()
         if not leader_election_enabled:
             self._is_leader_event.set()
+        # Wake event used to interrupt the post-collection sleep so a
+        # re-acquired leader does not wait up to a full poll interval before
+        # repopulating the gauges that ``_clear_resource_gauges`` just
+        # cleared on demotion. Set on shutdown and on every leader
+        # acquisition; cleared by each poller before it issues a fresh
+        # collection.
+        self._wake_event = threading.Event()
         self._vmss_thread: threading.Thread | None = None
         self._lustre_thread: threading.Thread | None = None
         self._metric_lock = threading.Lock()
@@ -568,6 +575,8 @@ class VmssMetricsExporter:
         self._stop_event.set()
         # Wake up any poller blocked in _wait_for_leadership_or_stop().
         self._is_leader_event.set()
+        # Also interrupt a poller blocked in its post-collection sleep.
+        self._wake_event.set()
         if self._vmss_thread:
             self._vmss_thread.join(timeout=timeout)
         if self._lustre_thread:
@@ -588,6 +597,11 @@ class VmssMetricsExporter:
         if is_leader:
             self.is_leader.set(1.0)
             self._is_leader_event.set()
+            # Wake any poller mid-sleep so the re-acquired leader collects
+            # immediately and refills the gauges that ``_clear_resource_gauges``
+            # cleared during the prior demotion. Without this signal a brief
+            # lease bounce produces a poll_interval-sized gap in the dashboard.
+            self._wake_event.set()
             LOGGER.info("Acquired leader-election lock; resuming Azure polling")
         else:
             self.is_leader.set(0.0)
@@ -667,18 +681,23 @@ class VmssMetricsExporter:
                 # Follower: wait until either we become leader or the process stops.
                 self._wait_for_leadership_or_stop()
                 continue
+            # Clear before collect so a wake signal raised *during* the
+            # collection (e.g. leader re-acquisition mid-Azure-call) is not
+            # lost: the post-collect ``wait`` will then return immediately.
+            self._wake_event.clear()
             with suppress(Exception):
                 self._collect_vmss_once()
-            self._stop_event.wait(self._poll_interval_seconds)
+            self._wake_event.wait(self._poll_interval_seconds)
 
     def _poll_lustre_forever(self) -> None:
         while not self._stop_event.is_set():
             if not self._is_leader_event.is_set():
                 self._wait_for_leadership_or_stop()
                 continue
+            self._wake_event.clear()
             with suppress(Exception):
                 self.collect_lustre_once()
-            self._stop_event.wait(self._lustre_poll_interval_seconds)
+            self._wake_event.wait(self._lustre_poll_interval_seconds)
 
     def _wait_for_leadership_or_stop(self) -> None:
         """Block until leadership is acquired or shutdown is requested."""

@@ -709,3 +709,82 @@ def test_follower_poll_loop_does_not_call_collect_counts() -> None:
     threading.Event().wait(0.3)
     exporter.stop(timeout=2.0)
     assert calls == []
+
+
+def test_leader_reacquire_wakes_poller_immediately() -> None:
+    """A brief leader-election bounce must trigger a fresh collect, not wait the full poll interval.
+
+    Regression test for the production gap observed when ``POLL_INTERVAL_SECONDS=300``: every
+    leader bounce cleared the per-resource gauges via ``_clear_resource_gauges`` but the
+    re-acquired leader's polling thread stayed asleep on ``self._stop_event.wait(300)`` until
+    its next natural cycle, leaving ``/metrics`` empty for up to 5 minutes.
+    """
+
+    import threading
+
+    collect_event = threading.Event()
+    collect_calls: list[int] = []
+
+    def collect() -> list[VmssCount]:
+        collect_calls.append(1)
+        collect_event.set()
+        return []
+
+    registry = CollectorRegistry()
+    # Use a deliberately long poll interval so a slow wake-up would make the
+    # test hang well past its timeout instead of producing a flaky pass.
+    exporter = VmssMetricsExporter(
+        collect,
+        registry=registry,
+        leader_election_enabled=True,
+        poll_interval_seconds=300,
+    )
+    exporter.start()
+    try:
+        exporter.set_leader(True)
+        assert collect_event.wait(timeout=2.0), (
+            "initial collect should happen after becoming leader"
+        )
+        collect_event.clear()
+        baseline_calls = len(collect_calls)
+
+        # Simulate a leader bounce: demote then promptly re-elect the same replica.
+        exporter.set_leader(False)
+        exporter.set_leader(True)
+
+        # The re-acquired leader must collect again well before poll_interval_seconds.
+        assert collect_event.wait(timeout=2.0), (
+            "re-acquired leader did not collect within 2s; "
+            "polling thread is still sleeping on the old poll interval"
+        )
+        assert len(collect_calls) > baseline_calls
+    finally:
+        exporter.stop(timeout=2.0)
+
+
+def test_stop_interrupts_polling_sleep() -> None:
+    """stop() must wake a poller that is mid-sleep, not block until the poll interval elapses."""
+
+    import threading
+    import time
+
+    collect_event = threading.Event()
+
+    def collect() -> list[VmssCount]:
+        collect_event.set()
+        return []
+
+    registry = CollectorRegistry()
+    exporter = VmssMetricsExporter(
+        collect,
+        registry=registry,
+        poll_interval_seconds=300,
+    )
+    exporter.start()
+    assert collect_event.wait(timeout=2.0), "initial collect should happen immediately"
+
+    start = time.monotonic()
+    exporter.stop(timeout=5.0)
+    elapsed = time.monotonic() - start
+    assert exporter._vmss_thread is None or not exporter._vmss_thread.is_alive()
+    assert elapsed < 5.0, f"stop() took {elapsed:.2f}s; expected to interrupt the poll sleep"

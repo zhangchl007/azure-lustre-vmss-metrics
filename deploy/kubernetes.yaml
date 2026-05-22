@@ -18,8 +18,8 @@ metadata:
     azure.workload.identity/client-id: bc4d548a-d6ed-46ab-88bb-24574de23c46
 ---
 # Dedicated ServiceAccount used by the exporter pods. RBAC below
-# grants the access needed for the kubernetes.leaderelection
-# ConfigMapLock to read/update its lock annotation.
+# grants the access needed for the exporter's native
+# coordination.k8s.io/v1 Lease leader election.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -36,12 +36,18 @@ metadata:
   labels:
     app.kubernetes.io/name: vmss-metrics-exporter
 rules:
-  # ConfigMapLock from kubernetes.leaderelection stores the holder
-  # identity inside an annotation on a single ConfigMap whose name
-  # matches LEADER_ELECTION_LOCK_NAME below.
-  - apiGroups: [""]
-    resources: ["configmaps"]
+  # Native Lease leader election stores the holder identity in a single
+  # coordination.k8s.io/v1 Lease whose name matches
+  # LEADER_ELECTION_LOCK_NAME below. Active release clears holderIdentity
+  # during shutdown so standby pods can acquire on the next retry tick.
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
     verbs: ["get", "list", "watch", "create", "update", "patch"]
+  # The exporter labels only the elected leader pod so Service-based scrapers
+  # never load-balance to an idle follower exposing zero resource metrics.
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "patch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -115,7 +121,7 @@ spec:
                     app.kubernetes.io/name: vmss-metrics-exporter
       containers:
         - name: exporter
-          image: zhangchl007/vmss-metrics-exporter:v18
+          image: zhangchl007/vmss-metrics-exporter:v23
           imagePullPolicy: IfNotPresent
           ports:
             - name: metrics
@@ -175,16 +181,20 @@ spec:
             - name: LUSTRE_METRICS_REQUEST_JITTER_SECONDS
               value: "0.5"
             # ----- Leader election (active/standby HA) --------------------
+            # Tuning (2026-05-22): native Lease active release targets ~1-2s
+            # graceful rollout handoff (bounded by retry=1 plus pod startup and
+            # first collection latency). The 8s lease still bounds ungraceful
+            # failover if a pod/node disappears before it can release.
             - name: LEADER_ELECTION_ENABLED
               value: "true"
             - name: LEADER_ELECTION_LOCK_NAME
               value: "vmss-metrics-exporter"
             - name: LEADER_ELECTION_LEASE_DURATION_SECONDS
-              value: "15"
+              value: "8"
             - name: LEADER_ELECTION_RENEW_DEADLINE_SECONDS
-              value: "10"
+              value: "5"
             - name: LEADER_ELECTION_RETRY_PERIOD_SECONDS
-              value: "2"
+              value: "1"
             # Downward API: candidate identity = pod name, lock namespace = pod namespace.
             - name: POD_NAME
               valueFrom:
@@ -217,6 +227,7 @@ metadata:
 spec:
   selector:
     app.kubernetes.io/name: vmss-metrics-exporter
+    vmss-metrics-exporter-leader: "true"
   ports:
     - name: metrics
       port: 8000
