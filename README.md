@@ -94,6 +94,7 @@ Set configuration with environment variables. A local `.env` file is also suppor
 | `LEADER_ELECTION_ENABLED` | `false` | Enable active/standby Kubernetes leader election. |
 | `LEADER_ELECTION_LOCK_NAME` | `vmss-metrics-exporter` | Leader-election lock name. |
 | `LEADER_ELECTION_NAMESPACE` | `default` | Leader-election namespace. |
+| `SHUTDOWN_DRAIN_SECONDS` | `0` | After graceful Lease release on shutdown, keep serving cached `/metrics` for this many seconds to smooth rolling-update handoff. |
 
 For Service Principal auth, set:
 
@@ -189,8 +190,10 @@ Apply with `kubectl apply -f deploy/lustre-alert-rules.yaml` against your Promet
 
 If you are scraping the exporter from Azure Monitor managed Prometheus, the
 [deploy/ama-metrics-settings-configmap-v1.yaml](deploy/ama-metrics-settings-configmap-v1.yaml)
-ConfigMap (namespace `kube-system`) enables custom pod scrape so the exporter
-Pod is picked up by the AMA agent. Apply it once per cluster:
+ConfigMap (namespace `kube-system`) defines a custom scrape job that targets the
+stable Kubernetes Service DNS name (`vmss-metrics-exporter.default.svc.cluster.local:8000`).
+This avoids pod-target churn during rollouts and keeps dashboard time series
+continuous. Apply it once per cluster:
 
 ```bash
 kubectl apply -f deploy/ama-metrics-settings-configmap-v1.yaml
@@ -241,6 +244,11 @@ env:
 ```
 
 The leader holds a `coordination.k8s.io/Lease`; standby replicas keep `/metrics` served but skip collection until they win the lease. RBAC for the lease is in [deploy/kubernetes.yaml](deploy/kubernetes.yaml).
+
+For smoother rolling updates, set `SHUTDOWN_DRAIN_SECONDS` (for example `15`) and
+ensure `terminationGracePeriodSeconds` is larger than that value. This lets the
+terminating leader continue serving cached metrics briefly after releasing the
+Lease while the new leader acquires and warms up.
 
 ## Pressure testing Azure Managed Lustre
 

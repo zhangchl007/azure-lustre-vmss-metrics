@@ -21,7 +21,10 @@ The design goals are:
    concurrency, local monotonic observation time, and bounded API request
    timeouts.
 5. **Safe shutdown** — release the Lease without clearing the terminating pod's
-   metrics while it can still be scraped.
+  metrics while it can still be scraped.
+6. **Rollout continuity** — after graceful Lease release, keep serving cached
+  metrics for a short drain window so successful Service scrapes stay
+  non-empty during endpoint propagation.
 
 ## Files involved
 
@@ -29,6 +32,7 @@ The design goals are:
 |---|---|
 | `src/vmss_metrics_exporter/leader_election.py` | Native `coordination.k8s.io/v1 Lease` election loop. |
 | `src/vmss_metrics_exporter/main.py` | Wires election callbacks into exporter leadership state and Service label management. |
+| `src/vmss_metrics_exporter/config.py` | Parses `SHUTDOWN_DRAIN_SECONDS` and leader-election runtime settings. |
 | `src/vmss_metrics_exporter/collector.py` | Starts/stops polling, clears follower gauges, and wakes pollers immediately on leadership acquisition. |
 | `deploy/kubernetes.yaml` | RBAC, Deployment, leader-election env vars, and Service selector. |
 | `tests/test_leader_election.py` | Unit coverage for Lease acquisition, renewal, release, conflicts, local-time expiry, and request timeouts. |
@@ -103,16 +107,18 @@ Kubernetes `client-go` leader election:
 | `ReleaseOnCancel` | Graceful shutdown clears `holderIdentity` and writes `leaseDurationSeconds=1`. |
 | API timeout below renew deadline | Each Lease API call uses `_request_timeout=(max(1, renewDeadline/2), max(1, renewDeadline/2))`. |
 
-The main deliberate difference is shutdown callback behavior:
+The main deliberate differences are shutdown callback and drain behavior:
 
 - client-go always calls `OnStoppedLeading` when the elector exits.
 - This exporter calls `release(notify_stopped=False)` during process shutdown.
+- After releasing the Lease, this exporter can sleep for a configured drain
+  window (`SHUTDOWN_DRAIN_SECONDS`) while still serving cached `/metrics`.
 
-That difference is intentional. `OnStoppedLeading` clears the follower gauges. If
-a terminating pod clears its metrics while its HTTP endpoint is still scrapeable,
-Prometheus can record blanks during the small termination window. Therefore,
-graceful shutdown releases the Lease but does not clear the terminating pod's
-metrics.
+These differences are intentional. `OnStoppedLeading` clears the follower gauges.
+If a terminating pod clears its metrics while its HTTP endpoint is still
+scrapeable, Prometheus can record blanks during the small termination window.
+Therefore, graceful shutdown releases the Lease, does not clear terminating-pod
+metrics, and (optionally) keeps serving cached metrics for a short drain window.
 
 Organic leadership loss still calls the stopped callback and clears metrics,
 because a still-running follower must not expose stale leader data.
@@ -218,7 +224,8 @@ cleared metrics.
 During graceful process shutdown, the runner uses `release(notify_stopped=False)`,
 so the Lease is released without invoking the demotion callback. The pod is
 already terminating, and avoiding metric clearing prevents scrape blanks during
-endpoint removal latency.
+endpoint removal latency. With `SHUTDOWN_DRAIN_SECONDS > 0`, the process also
+keeps serving cached metrics briefly after Lease release to bridge the handoff.
 
 ## Poller wake-up behavior
 
@@ -267,6 +274,8 @@ Current deployed values in `deploy/kubernetes.yaml`:
   value: "5"
 - name: LEADER_ELECTION_RETRY_PERIOD_SECONDS
   value: "1"
+- name: SHUTDOWN_DRAIN_SECONDS
+  value: "15"
 ```
 
 Validation rules:
@@ -293,18 +302,19 @@ For a graceful rolling update:
 1. Old leader receives SIGTERM.
 2. Old leader releases the Lease with empty `holderIdentity` and
    `leaseDurationSeconds=1`.
-3. Standby/new pod observes the releasable Lease on its next retry tick.
-4. New leader collects once immediately.
-5. New leader patches its pod label to enter the Service endpoints.
-6. Service scrapes continue returning leader metrics.
+3. Old leader keeps serving cached `/metrics` for `SHUTDOWN_DRAIN_SECONDS`
+  (if configured) while terminating.
+4. Standby/new pod observes the releasable Lease on its next retry tick.
+5. New leader collects once immediately.
+6. New leader patches its pod label to enter the Service endpoints.
+7. Service scrapes continue returning leader metrics.
 
-In the verified v23 deployment:
+In the verified v24 (`v24-rollout-drain`) deployment:
 
 - Service endpoint contained only the leader pod IP.
-- 20/20 repeated Service scrapes returned leader metrics.
-- A controlled v23→v23 rollout produced 56 successful Service samples and 0 bad
-  metric samples; all successful samples had `is_leader=1`, `vmss_total=20`, and
-  20 VMSS instance series.
+- Repeated Service scrapes returned leader metrics.
+- Controlled rollout samplers during restart observed no bad successful samples
+  and no scrape errors (`bad=0`, `err=0`) for VMSS timeline checks.
 
 ## Operational verification
 
@@ -411,9 +421,12 @@ That increases ungraceful failover time but tolerates more API-server jitter.
 
 ### Leader label remains on an old pod
 
-The pod label is removed best-effort on organic demotion. On abrupt node failure,
-the old pod disappears, so its label disappears with it. If a stale label exists
-on a running pod, remove it manually:
+During graceful rollout with drain enabled, a terminating old leader may retain
+`vmss-metrics-exporter-leader=true` briefly. This is expected while it serves
+cached metrics. The Service endpoint should still converge to the new leader.
+
+For truly stale labels (for example, a running non-leader pod after failed patch),
+remove manually:
 
 ```bash
 kubectl -n default label pod <pod-name> vmss-metrics-exporter-leader-
