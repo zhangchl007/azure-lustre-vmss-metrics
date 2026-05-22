@@ -167,7 +167,7 @@ def _is_retryable_exception(exc: Exception) -> bool:
     return status_code in {408, 409, 429, 500, 502, 503, 504}
 
 
-def create_resource_graph_client() -> ResourceGraphClientProtocol:
+def create_resource_graph_client(credential: object | None = None) -> ResourceGraphClientProtocol:
     """Create an authenticated Azure Resource Graph client.
 
     Uses :class:`~vmss_metrics_exporter.credentials.ResilientAzureCredential`, which
@@ -180,14 +180,16 @@ def create_resource_graph_client() -> ResourceGraphClientProtocol:
 
     try:
         from azure.mgmt.resourcegraph import ResourceGraphClient
-
-        from .credentials import create_credential
     except ImportError as exc:  # pragma: no cover - exercised only when dependencies are missing.
         raise RuntimeError(
             "Azure SDK packages are not installed. Install the project dependencies first."
         ) from exc
 
-    return ResourceGraphClient(create_credential())
+    if credential is None:
+        from .credentials import create_credential
+
+        credential = create_credential()
+    return ResourceGraphClient(credential)
 
 
 def build_query_request(

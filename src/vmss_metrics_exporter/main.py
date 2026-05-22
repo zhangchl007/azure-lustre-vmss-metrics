@@ -7,11 +7,13 @@ import logging
 import signal
 import sys
 import threading
+from contextlib import suppress
 
 from prometheus_client import start_http_server
 
 from .azure_managed_lustre import (
     AzureManagedLustreCollector,
+    MetricsQueryClientProtocol,
     create_metrics_query_client,
     summarize_lustre_metrics,
 )
@@ -23,6 +25,7 @@ from .azure_resource_graph import (
 )
 from .collector import VmssMetricsExporter
 from .config import Settings, load_settings
+from .credentials import create_credential
 from .leader_election import (
     LeaderElectionConfig,
     LeaderElectionRunner,
@@ -43,10 +46,16 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
+    credential: object | None = None
+    resource_graph_client: ResourceGraphClientProtocol | None = None
+    metrics_query_client: MetricsQueryClientProtocol | None = None
+    exporter: VmssMetricsExporter | None = None
+    leader_election_runner: LeaderElectionRunner | None = None
     try:
         settings = load_settings(require_subscription_ids=True)
         _configure_logging(settings.log_level)
-        resource_graph_client = create_resource_graph_client()
+        credential = create_credential()
+        resource_graph_client = create_resource_graph_client(credential)
         collector = AzureResourceGraphVmssCollector(
             resource_graph_client,
             settings.subscription_ids,
@@ -54,7 +63,13 @@ def main(argv: list[str] | None = None) -> int:
             max_retries=settings.arg_max_retries,
             retry_base_delay_seconds=settings.arg_retry_base_delay_seconds,
         )
-        lustre_collector = _create_lustre_collector(settings, resource_graph_client)
+        if settings.enable_managed_lustre_metrics:
+            metrics_query_client = create_metrics_query_client(credential)
+        lustre_collector = _create_lustre_collector(
+            settings,
+            resource_graph_client,
+            metrics_query_client,
+        )
 
         if args.once:
             print(summarize_counts(collector.collect()))
@@ -85,9 +100,6 @@ def main(argv: list[str] | None = None) -> int:
         )
         exporter.start()
         _wait_for_shutdown_signal()
-        if leader_election_runner is not None:
-            leader_election_runner.release()
-        exporter.stop()
         return 0
     except KeyboardInterrupt:
         return 130
@@ -95,17 +107,41 @@ def main(argv: list[str] | None = None) -> int:
         logging.basicConfig(level=logging.ERROR, format="%(levelname)s %(name)s: %(message)s")
         LOGGER.exception("Exporter failed to start: %s", exc)
         return 1
+    finally:
+        if leader_election_runner is not None:
+            with suppress(Exception):
+                leader_election_runner.release()
+        if exporter is not None:
+            with suppress(Exception):
+                exporter.stop()
+        _close_if_supported(metrics_query_client)
+        _close_if_supported(resource_graph_client)
+        _close_if_supported(credential)
 
 
 def _create_lustre_collector(
     settings: Settings,
     resource_graph_client: ResourceGraphClientProtocol,
+    metrics_query_client: MetricsQueryClientProtocol | None,
 ) -> AzureManagedLustreCollector | None:
+    """Create the Azure Managed Lustre collector when enabled.
+
+    ``metrics_query_client`` must be supplied by the caller so the Azure Monitor
+    client shares the same ``ResilientAzureCredential`` as the Resource Graph
+    client (see issue #9). Passing ``None`` while Managed Lustre metrics are
+    enabled is a programming error.
+    """
+
     if not settings.enable_managed_lustre_metrics:
         return None
+    if metrics_query_client is None:
+        raise RuntimeError(
+            "metrics_query_client is required when enable_managed_lustre_metrics "
+            "is True; pass the shared credential-backed client from main()."
+        )
     return AzureManagedLustreCollector(
         resource_graph_client,
-        create_metrics_query_client(),
+        metrics_query_client,
         settings.subscription_ids,
         page_size=settings.arg_page_size,
         lookback_minutes=settings.lustre_metrics_lookback_minutes,
@@ -162,6 +198,17 @@ def _configure_logging(level_name: str) -> None:
     logging.basicConfig(level=level, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     if level > logging.DEBUG:
         logging.getLogger("azure").setLevel(logging.WARNING)
+
+
+def _close_if_supported(resource: object | None) -> None:
+    """Best-effort close for Azure SDK clients and credentials."""
+
+    if resource is None:
+        return
+    close = getattr(resource, "close", None)
+    if callable(close):
+        with suppress(Exception):
+            close()
 
 
 def _wait_for_shutdown_signal() -> None:

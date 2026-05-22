@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import sys
+import types
 from dataclasses import dataclass
 
 import pytest
@@ -10,6 +12,7 @@ from vmss_metrics_exporter.azure_managed_lustre import (
     LUSTRE_METRICS,
     AzureManagedLustreCollector,
     _chunk_metric_names,
+    create_metrics_query_client,
     normalize_filesystem_row,
     normalize_lustre_metrics_response,
     normalize_ost_bytes_available_response,
@@ -386,6 +389,29 @@ class PartiallyFailingMetricsClient(FakeMetricsClient):
         if resource_uri.endswith("lustre-b"):
             raise RuntimeError("boom")
         return super().query_resource(resource_uri, _metric_names, **_kwargs)
+
+
+def test_create_metrics_query_client_uses_provided_credential(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    credential = object()
+
+    class _FakeMetricsQueryClient:
+        def __init__(self, received_credential: object) -> None:
+            self.credential = received_credential
+
+    fake_module = types.ModuleType("azure.monitor.query")
+    fake_module.MetricsQueryClient = _FakeMetricsQueryClient
+    monkeypatch.setitem(sys.modules, "azure.monitor.query", fake_module)
+    monkeypatch.setattr(
+        "vmss_metrics_exporter.credentials.create_credential",
+        lambda: pytest.fail("create_credential should not be called when credential is provided"),
+    )
+
+    client = create_metrics_query_client(credential)
+
+    assert isinstance(client, _FakeMetricsQueryClient)
+    assert client.credential is credential
 
 
 def test_amlfs_query_discovers_all_filesystems() -> None:

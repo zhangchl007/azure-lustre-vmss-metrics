@@ -339,19 +339,21 @@ class AzureManagedLustreCollector:
         return (self._retry_base_delay_seconds * (2**attempt)) + jitter
 
 
-def create_metrics_query_client() -> MetricsQueryClientProtocol:
+def create_metrics_query_client(credential: object | None = None) -> MetricsQueryClientProtocol:
     """Create an authenticated Azure Monitor metrics query client."""
 
     try:
         from azure.monitor.query import MetricsQueryClient
-
-        from .credentials import create_credential
     except ImportError as exc:  # pragma: no cover - exercised only when dependencies are missing.
         raise RuntimeError(
             "azure-monitor-query is not installed. Install the project dependencies first."
         ) from exc
 
-    return MetricsQueryClient(create_credential())
+    if credential is None:
+        from .credentials import create_credential
+
+        credential = create_credential()
+    return MetricsQueryClient(credential)
 
 
 def normalize_filesystem_row(row: Mapping[str, Any]) -> ManagedLustreFilesystem:

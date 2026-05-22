@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import sys
+import types
 from dataclasses import dataclass
 
 import pytest
@@ -7,6 +9,7 @@ import pytest
 from vmss_metrics_exporter.azure_resource_graph import (
     VMSS_COUNTS_QUERY,
     AzureResourceGraphVmssCollector,
+    create_resource_graph_client,
     normalize_vmss_count_row,
     parse_vmss_parent_from_child_id,
     summarize_counts,
@@ -56,6 +59,29 @@ class FakeAzureError(Exception):
     def __init__(self, response: object) -> None:
         super().__init__("bad request")
         self.response = response
+
+
+def test_create_resource_graph_client_uses_provided_credential(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    credential = object()
+
+    class _FakeResourceGraphClient:
+        def __init__(self, received_credential: object) -> None:
+            self.credential = received_credential
+
+    fake_module = types.ModuleType("azure.mgmt.resourcegraph")
+    fake_module.ResourceGraphClient = _FakeResourceGraphClient
+    monkeypatch.setitem(sys.modules, "azure.mgmt.resourcegraph", fake_module)
+    monkeypatch.setattr(
+        "vmss_metrics_exporter.credentials.create_credential",
+        lambda: pytest.fail("create_credential should not be called when credential is provided"),
+    )
+
+    client = create_resource_graph_client(credential)
+
+    assert isinstance(client, _FakeResourceGraphClient)
+    assert client.credential is credential
 
 
 def test_normalize_vmss_count_row() -> None:

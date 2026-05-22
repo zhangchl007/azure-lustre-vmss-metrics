@@ -22,6 +22,7 @@ class _FakeCred:
         # Each get_token call consumes the next item.
         self._iter = iter(list(behavior))
         self.calls = 0
+        self.close_calls = 0
 
     def get_token(self, *_scopes: str, **_kwargs: object) -> AccessToken:
         self.calls += 1
@@ -32,7 +33,15 @@ class _FakeCred:
         return outcome
 
     def close(self) -> None:  # pragma: no cover - close is best-effort.
-        pass
+        self.close_calls += 1
+
+
+class _CloseRaisesCred:
+    def get_token(self, *_scopes: str, **_kwargs: object) -> AccessToken:
+        raise AssertionError("not used")
+
+    def close(self) -> None:
+        raise RuntimeError("close failed")
 
 
 def _install_chain(monkeypatch: pytest.MonkeyPatch, chain: list[tuple[str, object]]) -> None:
@@ -158,6 +167,18 @@ def test_construction_requires_at_least_one_credential(monkeypatch: pytest.Monke
     _install_chain(monkeypatch, [])
     with pytest.raises(RuntimeError):
         ResilientAzureCredential()
+
+
+def test_close_is_best_effort_and_repeatable(monkeypatch: pytest.MonkeyPatch) -> None:
+    good = _FakeCred([])
+    bad = _CloseRaisesCred()
+    _install_chain(monkeypatch, [("good", good), ("bad", bad)])
+    cred = ResilientAzureCredential()
+
+    cred.close()
+    cred.close()
+
+    assert good.close_calls == 2
 
 
 def test_chain_skips_workload_identity_when_env_missing(
