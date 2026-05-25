@@ -1,0 +1,177 @@
+---
+# Scenario F Leg 2 (docs/lustre-pressure-test.md § 14): pull the staged
+# Waymo dataset from `az:waymo-v2` into an isolated Lustre directory.
+#
+# Auth: reuses the existing `waymo-copy` ServiceAccount (see
+# waymo-blob-copy-job.yaml) which is federated to MI `mi-waymo-copy`
+# (clientId ab01bc3e-e8da-40fa-b9b8-43e527612a18). The MI has
+# `Storage Blob Data Contributor` on container `waymo-v2` only (sub-scope);
+# read for Leg 2 is covered by the same role.
+#
+# Destination: /mnt/lustre/ingest/waymo_v2_blob/${RUN_ID}/ — isolated from
+# /mnt/lustre/waymo_v2/. The container command refuses to proceed if the
+# resolved DEST is inside the dataset root (immutability guard).
+#
+# Rendered by scripts/av_blob_to_lustre.sh: the helper substitutes RUN_ID,
+# SOURCE_SUFFIX, RCLONE_TRANSFERS, RCLONE_CHECKERS, RCLONE_BUFFER_SIZE via
+# `kubectl create --dry-run` JSON before applying.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: waymo-blob-to-lustre
+  namespace: lustre-pressure-test
+  labels:
+    app.kubernetes.io/name: waymo-blob-to-lustre
+    app.kubernetes.io/component: blob-ingest
+    app.kubernetes.io/part-of: azure-managed-lustre-pressure-test
+spec:
+  backoffLimit: 2
+  # 6h deadline. Same-region Blob -> Lustre throughput is typically
+  # 800–1500 MiB/s on D8d_v5, so 683 GiB finishes well under this cap.
+  activeDeadlineSeconds: 21600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: waymo-blob-to-lustre
+        app.kubernetes.io/component: blob-ingest
+        azure.workload.identity/use: "true"
+    spec:
+      serviceAccountName: waymo-copy
+      restartPolicy: OnFailure
+      nodeSelector:
+        kubernetes.azure.com/agentpool: juicefspool
+      containers:
+        - name: rclone
+          # Same image and auth shape as waymo-blob-copy-job.yaml. rclone 1.69
+          # has stable workload-identity support via DefaultAzureCredential
+          # (uses AZURE_FEDERATED_TOKEN_FILE injected by the WI webhook).
+          image: rclone/rclone:1.69
+          imagePullPolicy: IfNotPresent
+          env:
+            # ----- Source (az:waymo-v2) -----
+            - name: RCLONE_CONFIG_AZ_TYPE
+              value: azureblob
+            - name: RCLONE_CONFIG_AZ_ACCOUNT
+              value: oidcissuer6c7a332c
+            - name: RCLONE_CONFIG_AZ_USE_AZUREAD
+              value: "true"
+            - name: RCLONE_CONFIG_AZ_ENV_AUTH
+              value: "true"
+            # ----- Copy endpoints -----
+            # SOURCE_SUFFIX is patched by av_blob_to_lustre.sh. Empty = full
+            # container; e.g. "testing" limits to az:waymo-v2/testing.
+            - name: SOURCE_SUFFIX
+              value: ""
+            # RUN_ID is patched by av_blob_to_lustre.sh.
+            - name: RUN_ID
+              value: "blob-ingest-default"
+            - name: DATASET_ROOT
+              value: /mnt/lustre/waymo_v2
+            - name: LUSTRE_INGEST_ROOT
+              value: /mnt/lustre/ingest/waymo_v2_blob
+            # ----- Tuning -----
+            - name: RCLONE_TRANSFERS
+              value: "32"
+            - name: RCLONE_CHECKERS
+              value: "16"
+            - name: RCLONE_BUFFER_SIZE
+              value: 32M
+            - name: RCLONE_STATS
+              value: 30s
+            - name: RCLONE_STATS_ONE_LINE
+              value: "true"
+            - name: RCLONE_LOG_LEVEL
+              value: INFO
+          command:
+            - /bin/sh
+            - -ec
+            - |
+              echo "=== $(date -u) Scenario F Leg 2: az:waymo-v2 -> Lustre ==="
+              SOURCE="az:waymo-v2"
+              if [ -n "${SOURCE_SUFFIX}" ]; then
+                SOURCE="${SOURCE}/${SOURCE_SUFFIX}"
+              fi
+              DEST="${LUSTRE_INGEST_ROOT}/${RUN_ID}"
+              echo "SOURCE=${SOURCE}"
+              echo "DEST=${DEST}"
+              echo "DATASET_ROOT=${DATASET_ROOT}"
+
+              # Immutability guard: DEST must not equal DATASET_ROOT and must
+              # not be a path inside DATASET_ROOT. Pure-shell prefix check
+              # (BusyBox in the rclone image lacks `realpath -m`). Both paths
+              # are already absolute in this manifest; there are no symlinks
+              # on the Lustre mount, so a string-prefix check is sound.
+              # Normalise trailing slashes once.
+              norm() { printf '%s' "$1" | sed 's:/*$::'; }
+              ND=$(norm "${DEST}")
+              NR=$(norm "${DATASET_ROOT}")
+              if [ "${ND}" = "${NR}" ]; then
+                echo "ERROR: DEST equals DATASET_ROOT" >&2
+                exit 1
+              fi
+              case "${ND}/" in
+                "${NR}/"*)
+                  echo "ERROR: DEST (${ND}) is inside DATASET_ROOT (${NR})" >&2
+                  exit 1
+                  ;;
+              esac
+
+              echo "--- rclone version ---"
+              rclone version | head -3
+              echo "--- workload identity env ---"
+              env | grep -E '^AZURE_(CLIENT_ID|TENANT_ID|FEDERATED_TOKEN_FILE)' | sort
+
+              echo "=== $(date -u) source smoke (size + count) ==="
+              rclone size "${SOURCE}" --json | tee /tmp/source-size.json
+              SOURCE_BYTES=$(sed -n 's/.*"bytes":\([0-9]*\).*/\1/p' /tmp/source-size.json)
+              SOURCE_COUNT=$(sed -n 's/.*"count":\([0-9]*\).*/\1/p' /tmp/source-size.json)
+              echo "SOURCE_BYTES=${SOURCE_BYTES} SOURCE_COUNT=${SOURCE_COUNT}"
+
+              mkdir -p "${DEST}"
+              echo "=== initial Lustre state ==="
+              df -h /mnt/lustre || true
+              du -sh "${DEST}" 2>/dev/null || true
+
+              # rclone copy is idempotent: same DEST resumes. New RUN_ID = fresh copy.
+              EXISTING=$(find "${DEST}" -type f 2>/dev/null | wc -l)
+              if [ "${EXISTING}" -gt 0 ]; then
+                echo "RESUMING: ${EXISTING} files already at ${DEST}"
+              fi
+
+              echo "=== $(date -u) starting Azure Blob -> Lustre copy ==="
+              rclone copy "${SOURCE}" "${DEST}" \
+                --fast-list \
+                --metadata \
+                --progress
+
+              echo "=== $(date -u) copy complete; final tally ==="
+              df -h /mnt/lustre || true
+              DEST_BYTES=$(find "${DEST}" -type f -exec stat -c '%s' {} + | awk '{s+=$1}END{print s+0}')
+              DEST_COUNT=$(find "${DEST}" -type f | wc -l)
+              echo "DEST_BYTES=${DEST_BYTES} DEST_COUNT=${DEST_COUNT}"
+              echo "SOURCE_BYTES=${SOURCE_BYTES} SOURCE_COUNT=${SOURCE_COUNT}"
+              awk -v sb="${SOURCE_BYTES}" -v db="${DEST_BYTES}" \
+                  'BEGIN { if (sb+0 == 0) { print "byte_delta=NA (no source)"; exit 0 }
+                           d = (db>sb)? (db-sb)/sb : (sb-db)/sb;
+                           printf "byte_delta=%.4f%%\n", d*100;
+                           exit (d<0.005 ? 0 : 2) }'
+              echo "=== $(date -u) Scenario F Leg 2 done ==="
+          resources:
+            requests:
+              cpu: 1
+              memory: 2Gi
+            limits:
+              cpu: "4"
+              memory: 4Gi
+          volumeMounts:
+            - name: lustre
+              mountPath: /mnt/lustre
+            - name: rclone-state
+              mountPath: /tmp/rclone
+      volumes:
+        - name: lustre
+          persistentVolumeClaim:
+            claimName: lustre-pressure-test-pvc
+        - name: rclone-state
+          emptyDir:
+            sizeLimit: 1Gi

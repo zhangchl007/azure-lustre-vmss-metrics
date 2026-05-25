@@ -115,14 +115,22 @@ Pressure-test Jobs pin `nodeSelector: kubernetes.azure.com/agentpool: juicefspoo
 | [deploy/pressure-test/namespace.yaml](deploy/pressure-test/namespace.yaml) | Dedicated `lustre-pressure-test` namespace. |
 | [deploy/pressure-test/pvc-example.yaml](deploy/pressure-test/pvc-example.yaml) | Static StorageClass/PV/PVC for the test filesystem. |
 | [deploy/pressure-test/azurelustre-csi-node-rbac.yaml](deploy/pressure-test/azurelustre-csi-node-rbac.yaml) | RBAC for the Azure Lustre CSI node DaemonSet. |
-| [deploy/pressure-test/av-workload-configmap.yaml](deploy/pressure-test/av-workload-configmap.yaml) | Knobs ConfigMap + stub script ConfigMap. |
+| [deploy/pressure-test/av-workload-configmap.yaml](deploy/pressure-test/av-workload-configmap.yaml) | Knobs ConfigMap + stub script ConfigMap. Includes `WRITE_ONLY_*` keys (§ 15.4). |
 | [deploy/pressure-test/av-dataset-discovery-job.yaml](deploy/pressure-test/av-dataset-discovery-job.yaml) | Single-pod read-only dataset profiler. |
 | [deploy/pressure-test/av-dataset-validation-job.yaml](deploy/pressure-test/av-dataset-validation-job.yaml) | Indexed pressure-test Job (default parallelism 10). |
 | [deploy/pressure-test/av-output-cleanup-job.yaml](deploy/pressure-test/av-output-cleanup-job.yaml) | Scoped cleanup for `RESULT_ROOT/<RUN_ID>` only. |
 | [deploy/pressure-test/waymo-download-job.yaml](deploy/pressure-test/waymo-download-job.yaml) | One-shot Job that downloads Waymo Open Dataset v2.0.1 from `gs://waymo_open_dataset_v_2_0_1/` into `/mnt/lustre/waymo_v2/`. **Kept in the repo for reproducibility**, but the Job object and its `gcp-credentials` Secret should be deleted from the cluster after the download completes (see § 13). Never re-run unless the dataset must be replaced. The validated May 20 path used `rclone/rclone:1.69` with OAuth material (`client-id`, `client-secret`, `token.json`); do not run shell `-x` while exporting secrets. |
-| [scripts/av_lustre_workload.py](scripts/av_lustre_workload.py) | AV simulator (modes: `discover`, `read-only`, `read-write-output`, `verify-output`). |
-| [scripts/av_pressure_phase.sh](scripts/av_pressure_phase.sh) | Phase driver: patch Job, wait, collect summaries. |
-| [scripts/lustre_safe_write_budget.py](scripts/lustre_safe_write_budget.py) | Local capacity budget calculator. |
+| [deploy/pressure-test/waymo-blob-copy-job.yaml](deploy/pressure-test/waymo-blob-copy-job.yaml) | Leg 1 of Scenario F (§ 14): GCS → `az:waymo-v2` workload-identity rclone copy. |
+| [deploy/pressure-test/waymo-blob-to-lustre-job.yaml](deploy/pressure-test/waymo-blob-to-lustre-job.yaml) | Leg 2 of Scenario F (§ 14): `az:waymo-v2` → `/mnt/lustre/ingest/waymo_v2_blob/<RUN_ID>/`. |
+| `deploy/pressure-test/lustre-fill-pvcs.yaml` | Generated 200-PVC fan-out for Scenario G (§ 15). Created on demand by `scripts/gen_lustre_fill_pvcs.py`; not committed in full (template lives in the generator). |
+| `deploy/pressure-test/lustre-fill-pvcs-pilot.yaml` | Generated 3-PVC pilot for Scenario G (§ 15.6 step 2). |
+| [scripts/av_lustre_workload.py](scripts/av_lustre_workload.py) | AV simulator (modes: `discover`, `read-only`, `read-write-output`, `verify-output`, `write-only`). The `write-only` mode is exercised exclusively by Scenario G. |
+| [scripts/av_pressure_phase.sh](scripts/av_pressure_phase.sh) | AV phase driver: patch Job, wait, collect summaries. |
+| [scripts/av_blob_to_lustre.sh](scripts/av_blob_to_lustre.sh) | Scenario F helper: render Leg 2 Job, watch rclone, capture summary. |
+| [scripts/av_lustre_fill_phase.sh](scripts/av_lustre_fill_phase.sh) | Scenario G helper: apply 200 single-pod fill Jobs, sample Prometheus, aggregate summaries. |
+| [scripts/gen_lustre_fill_pvcs.py](scripts/gen_lustre_fill_pvcs.py) | Generator for the 200-PV/PVC fan-out + per-PVC Job manifests (Scenario G). |
+| [scripts/lustre_preflight.sh](scripts/lustre_preflight.sh) | Shared pre-flight checks (§ 14.4, § 15.5, § 16.2). Top-level listing, capacity baseline, active-writer detection, dataset immutability presence. |
+| [scripts/lustre_safe_write_budget.py](scripts/lustre_safe_write_budget.py) | Local capacity budget calculator (AV ladder). |
 
 ## 6. Configuration reference
 
@@ -234,6 +242,28 @@ The test is structured as ordered **phases**. Each phase is a dedicated `RUN_ID`
 You can selectively run a subset; phases 0–5 are the minimum recommended after any dataset refresh.
 
 If a phase trips a kill switch (capacity > 80 %, exporter stale, EIO bursts, pod crashes, node pressure, **or** immutability-sample mismatch — see § 11) the sweep stops and the remaining phases are not run until root cause is fixed.
+
+**Scenarios F (§ 14) and G (§ 15) are not on this ladder.** They are standalone, mutually exclusive with each other and with the AV ladder, and have their own pre-flight / cleanup. See § 7.1 below for the supported ordering and combinations.
+
+### 7.1 Ordering and combinations
+
+The runbook supports four entry points against an AMLFS instance. They must execute serially — no two of them may run concurrently against the same filesystem.
+
+| # | Entry point | Touches `/mnt/lustre/waymo_v2/`? | Writes elsewhere? | Destructive? |
+| --: | --- | --- | --- | --- |
+| A | AV phase ladder (§ 7) | reads only | `/mnt/lustre/pressure-tests/av-results/<RUN_ID>/` | no (80 % cap) |
+| B | Scenario F — Blob → Lustre ingest (§ 14) | no | `/mnt/lustre/ingest/waymo_v2_blob/<RUN_ID>/` | no |
+| C | Scenario G — 200-client fill-to-ENOSPC (§ 15) | no (path-gate) | `/mnt/lustre/pressure-tests/fill-results/<RUN_ID>/` | **yes** (ENOSPC) |
+| D | § 16 final-state cleanup | no (refuses) | removes B & C result roots | no (keep-list enforced) |
+
+Recommended order when combining in a single maintenance window:
+
+1. **A** (AV ladder, if scheduled) — measures filesystem under realistic AV load against the immutable dataset.
+2. **B** (Scenario F) — measures Blob → Lustre throughput. **Do not** run during A: rclone `--metadata` writes saturate MDT and skew A's latency.
+3. **C** (Scenario G) — destructive; must be the last *measurement* step. Filesystem reaches ENOSPC.
+4. **D** (§ 16) — final cleanup; restores the keep-only-`waymo_v2/` invariant.
+
+If only one of {B, C} is run, the other entry remains optional. Order **B → C** is mandatory whenever both are run — C wipes any output left by B (since both share `/mnt/lustre/pressure-tests/` / `/mnt/lustre/ingest/` as result roots that § 16 sweeps).
 
 ## 8. Day-of execution
 
@@ -801,13 +831,22 @@ Create the report at `reports/av-press-<run-base>.md` after each full run. Requi
 - Run ID(s) cleaned up
 - Post-cleanup `azure_managed_lustre_ost_bytes_used_percent`
 - Node pool restored to baseline: autoscaler `min-count=2` if autoscaler is enabled, or `node-count=2` if autoscaler is disabled
+
+## Scenario F — Blob → Lustre ingest (if run)
+- Use the row template from § 14.10. Aggregate one row per Scenario F invocation in this section.
+
+## Scenario G — 200-client fill-to-ENOSPC (if run)
+- Use the row template from § 15.10. One section per Scenario G invocation.
+
+## Final filesystem state (§ 16, if run)
+- Use the row template from § 16.5.
 ```
 
 Use [reports/uae-lustre-24h-analysis-2026-05-19.md](reports/uae-lustre-24h-analysis-2026-05-19.md) as the narrative style reference.
 
 ## 13. Post-run cleanup
 
-Run these once the report is finalized. They restore the cluster to its pre-test state without touching `DATASET_ROOT`.
+Run these once the report is finalized. They restore the cluster to its pre-test state without touching `DATASET_ROOT`. After the per-`RUN_ID` cleanups below, **and once no further scenarios will run against this filesystem**, run the final-state cleanup in § 16 to enforce the keep-only-`/mnt/lustre/waymo_v2/` invariant.
 
 ```bash
 # 1. Per-RUN_ID result trees (one invocation per RUN_ID you want removed)
@@ -840,3 +879,892 @@ az aks nodepool scale \
 ```
 
 [deploy/pressure-test/waymo-download-job.yaml](deploy/pressure-test/waymo-download-job.yaml) is **kept in the repo** for reproducibility. The validated May 20 manifest uses rclone OAuth material in the `gcp-credentials` Secret (`client-id`, `client-secret`, `token.json`). If you switch back to an ADC-based flow, document the new required key names here before running. Never run the download Job unless the dataset must be replaced — a stray re-run could overwrite `/mnt/lustre/waymo_v2/`.
+
+---
+
+## 14. Scenario F — Tiered ingest via Azure Blob staging
+
+This is a **standalone scenario** (not part of the phase ladder in § 7). It characterizes the **two-leg ingest pipeline** in which the AV dataset is first staged in an Azure Blob container, then pulled into Lustre. It complements the direct GCS → Lustre path in [deploy/pressure-test/waymo-download-job.yaml](deploy/pressure-test/waymo-download-job.yaml) by isolating each leg so that the Blob → Lustre client-side ingest throughput can be measured independently of cross-cloud bandwidth.
+
+### 14.1 Goal and rationale
+
+1. **Decouple cross-cloud cost/latency from Lustre client ingest.** GCS → Azure Blob is a one-time, free same-region path; Blob → Lustre exercises the AKS workload identity + Lustre client write path that production batch jobs would actually use.
+2. **Provide a reproducible re-hydration path.** Once `az:waymo-v2` is populated, the Lustre filesystem can be re-hydrated in minutes (same-region Blob → Lustre is ~10–30× the cross-cloud GCS → Lustre throughput) without re-touching the public Waymo bucket.
+3. **Establish a Blob → Lustre throughput baseline** for comparison against other Lustre SKUs, AKS node SKUs, and rclone tunings.
+
+### 14.2 Architecture
+
+```mermaid
+flowchart LR
+   GCS[("gs://waymo_open_dataset_v_2_0_1<br/>(public, sponsored)")] -->|Leg 1: existing job<br/>waymo-blob-copy| BLOB[("az://oidcissuer6c7a332c/waymo-v2<br/>(same-region staging)")]
+   BLOB -->|Leg 2: NEW job<br/>waymo-blob-to-lustre| LUSTRE[/"/mnt/lustre/ingest/waymo_v2_blob/&lt;RUN_ID&gt;/<br/>(isolated from /mnt/lustre/waymo_v2)"/]
+   classDef new fill:#dff,stroke:#077,stroke-width:2px;
+   class LUSTRE new;
+```
+
+Leg 1 (GCS → Blob) is **already implemented** in [deploy/pressure-test/waymo-blob-copy-job.yaml](deploy/pressure-test/waymo-blob-copy-job.yaml). Leg 2 is the new artifact this scenario introduces.
+
+### 14.3 Prerequisites
+
+| Asset | State | Notes |
+| --- | --- | --- |
+| Azure Storage account `oidcissuer6c7a332c` | exists | container `waymo-v2` is the staging destination. |
+| User-assigned MI `mi-waymo-copy` (clientId `ab01bc3e-e8da-40fa-b9b8-43e527612a18`) | exists, federated to `lustre-pressure-test/waymo-copy` SA | already has **Storage Blob Data Contributor** on container `waymo-v2` only (sub-scope). Read covers both directions; no extra RBAC needed for Leg 2. |
+| Secret `lustre-pressure-test/gcp-credentials` | required only for Leg 1 | not consumed by Leg 2. After Leg 2 starts, the Secret can be removed (§ 13 step 3). |
+| PVC `lustre-pressure-test/lustre-pressure-test-pvc` | Bound, 8 TiB, RWX, sc `sc-almfstestcluster02-static` | shared with the AV phase ladder. Capacity headroom for Leg 2 ≈ container size of `az:waymo-v2` (≈683 GiB once Leg 1 completes). |
+| Node pool `juicefspool` | ≥ 1 node Ready | Leg 2 runs a single pod; node count irrelevant beyond 1. |
+| CSI DaemonSet `csi-azurelustre-node` | Running on the selected node | unchanged from § 4. |
+
+### 14.4 Pre-flight checks
+
+Run before Leg 2. The first check anchors against Leg 1's reported byte count so a partial Leg 1 cannot silently feed a partial Leg 2.
+
+```bash
+# 0. No other Lustre writer is active. Scenario F's measurement run must not
+#    overlap the AV phase ladder or Scenario G — each would skew the other's
+#    throughput and saturate the MDT (rclone --metadata is metadata-heavy).
+bash scripts/lustre_preflight.sh --check active-writers \
+   || { echo "ABORT: other writers active"; exit 1; }
+
+# 1. Leg 1 is complete AND its reported byte count matches the staging container.
+#    Source LEG1_BYTES from the Leg 1 report (reports/<leg1-run-id>/blob-copy-summary.txt
+#    field 'transferred_bytes'). Refuse to proceed if rclone size diverges > 0.5 %.
+export LEG1_BYTES="${LEG1_BYTES:?must export LEG1_BYTES from Leg 1 report}"
+kubectl run rclone-check --rm -it --restart=Never \
+   -n lustre-pressure-test \
+   --image=rclone/rclone:1.69 \
+   --serviceaccount=waymo-copy \
+   --overrides='{"apiVersion":"v1","spec":{"serviceAccountName":"waymo-copy","containers":[{"name":"rclone-check","image":"rclone/rclone:1.69","env":[{"name":"RCLONE_CONFIG_AZ_TYPE","value":"azureblob"},{"name":"RCLONE_CONFIG_AZ_ACCOUNT","value":"oidcissuer6c7a332c"},{"name":"RCLONE_CONFIG_AZ_USE_AZUREAD","value":"true"},{"name":"RCLONE_CONFIG_AZ_ENV_AUTH","value":"true"}],"command":["rclone","size","az:waymo-v2","--json"]}]}}' \
+   --labels=azure.workload.identity/use=true \
+   > /tmp/leg1-size.json
+CURRENT_BYTES=$(jq -r '.bytes' /tmp/leg1-size.json)
+python3 -c "import sys; e=int('${LEG1_BYTES}'); c=int('${CURRENT_BYTES}'); d=abs(c-e)/e; print(f'expected={e} current={c} delta={d:.4%}'); sys.exit(0 if d<0.005 else 2)" \
+   || { echo "ABORT: Leg 1 byte count mismatch > 0.5 %"; exit 1; }
+
+# 2. Lustre has headroom for the new directory.
+#    Required: ost_bytes_used_percent + (container_bytes / capacity) < 80.
+kubectl exec -n default deploy/vmss-metrics-exporter -- \
+   curl -s http://localhost:8000/metrics \
+   | grep 'azure_managed_lustre_ost_bytes_used_percent{filesystem_name="almfstestcluster02"}'
+
+# 3. The destination directory is NOT under /mnt/lustre/waymo_v2/.
+#    The Leg 2 job's command-line guard already enforces this; the
+#    check below is a defence-in-depth dry run.
+test "$DEST" = "/mnt/lustre/ingest/waymo_v2_blob/${RUN_ID}" \
+   && echo "OK: destination isolated from DATASET_ROOT" \
+   || { echo "ABORT: DEST collides with DATASET_ROOT"; exit 1; }
+```
+
+### 14.5 Procedure
+
+Leg 2 is driven by a new sibling helper [scripts/av_blob_to_lustre.sh](scripts/av_blob_to_lustre.sh) that renders a Job manifest from [deploy/pressure-test/waymo-blob-to-lustre-job.yaml](deploy/pressure-test/waymo-blob-to-lustre-job.yaml) with the requested `RUN_ID`, applies it, and tails the rclone output.
+
+```bash
+# Set a unique RUN_ID per ingest run (timestamp-based, matches reports/ convention).
+RUN_ID="blob-ingest-$(date -u +%Y%m%d-%H%M)"
+
+# Optional: limit scope to a sub-prefix (smoke test before a full re-hydrate).
+#   --source-suffix testing       # ≈ 9.5 GiB
+#   --source-suffix validation    # ≈ 120 GiB
+# Omit --source-suffix for a full container copy.
+
+bash scripts/av_blob_to_lustre.sh \
+   --run-id "${RUN_ID}" \
+   --source-suffix testing \
+   --output-dir "reports/${RUN_ID}"
+
+# Full-container re-hydrate (production-shape run):
+bash scripts/av_blob_to_lustre.sh \
+   --run-id "${RUN_ID}" \
+   --output-dir "reports/${RUN_ID}" \
+   --timeout 6h
+```
+
+Internals: the Job mounts `lustre-pressure-test-pvc` at `/mnt/lustre`, runs `rclone/rclone:1.69`, and uses workload-identity (`RCLONE_CONFIG_AZ_USE_AZUREAD=true`, `RCLONE_CONFIG_AZ_ENV_AUTH=true`) — identical auth shape to [deploy/pressure-test/waymo-blob-copy-job.yaml](deploy/pressure-test/waymo-blob-copy-job.yaml). The container command does, in order:
+
+1. Resolve `DEST=/mnt/lustre/ingest/waymo_v2_blob/${RUN_ID}`.
+2. Refuse to proceed if `realpath -m "${DEST}"` is `/mnt/lustre/waymo_v2` or has it as an ancestor (immutability guard).
+3. `mkdir -p "${DEST}"`.
+4. `rclone size az:waymo-v2[/${SOURCE_SUFFIX}]` smoke test.
+5. `df -h /mnt/lustre` before, `du -sh "${DEST}"` (expected empty unless resuming — see below).
+6. `rclone copy az:waymo-v2[/${SOURCE_SUFFIX}] "${DEST}" --fast-list --metadata --progress --stats=30s --stats-one-line`.
+7. `df -h /mnt/lustre` after, `du -sh "${DEST}"`.
+
+**Tunings.** Defaults match the existing copy job: `RCLONE_TRANSFERS=32`, `RCLONE_CHECKERS=16`, `RCLONE_BUFFER_SIZE=32M`. The helper accepts `--transfers N --checkers N --buffer-size SIZE` to override.
+
+**Throughput sweep (optional, recommended for a fresh baseline).** Run the same `SOURCE_SUFFIX=validation` (≈ 120 GiB) at four parallelism levels and record the curve. Each sweep point is one Scenario F invocation with a distinct `RUN_ID`:
+
+```bash
+for T in 16 32 64 128; do
+   bash scripts/av_blob_to_lustre.sh \
+      --run-id "blob-sweep-T${T}-$(date -u +%Y%m%d-%H%M)" \
+      --source-suffix validation \
+      --transfers "${T}" \
+      --output-dir "reports/blob-sweep-T${T}"
+   # Allow OST writeback to drain and capacity to recover before next point.
+   sleep 120
+done
+```
+
+Report the four `Avg MiB/s` numbers as a small table; the knee usually appears at `T=32` or `T=64` for D8d_v5 nodes.
+
+**Resumability.** rclone `copy` is idempotent: re-running with the *same* `DEST` skips files whose size+mtime match. Because the helper bakes `RUN_ID` into `DEST`, resumption after a partial run requires **reusing the same `RUN_ID`** — pass `--run-id <previous-id>` rather than generating a fresh one. The helper detects an existing `DEST` and prints `RESUMING: <bytes> already present` before kicking rclone. A new `RUN_ID` re-copies from scratch (slow but correct).
+
+**`--metadata` semantics.** rclone preserves blob `mtime` as the Lustre file `mtime` and the blob's `Content-Type` as an xattr. It does **not** preserve etag, lease state, or blob index tags. The Lustre file's raw bytes are identical to the blob's raw payload; `du -sh` may differ from `rclone size` because `du` counts Lustre stripe-aligned allocation while `rclone size` reports raw `Content-Length`. The pass-criterion in § 14.7 uses raw-bytes-from-`find` to make the comparison apples-to-apples.
+
+**Staging container retention.** After the runbook closes, `az:waymo-v2` is **kept** as the canonical re-hydration source. To tear it down explicitly (rarely needed):
+
+```bash
+az storage container delete \
+   --account-name oidcissuer6c7a332c \
+   --name waymo-v2 \
+   --auth-mode login
+# Re-creating it requires re-running waymo-blob-copy-job.yaml (Leg 1).
+```
+
+### 14.6 Monitoring and observability
+
+Watch the existing Grafana Lustre dashboard during the run; the relevant panels are:
+
+- **Aggregate write throughput** — `sum by (filesystem_name) (azure_managed_lustre_client_write_throughput_bytes_per_second)`. Expect a flat plateau matching the rclone live stats line.
+- **OST capacity** — `max by (filesystem_name) (azure_managed_lustre_ost_bytes_used_percent)`. Should climb monotonically from baseline to `baseline + container_size / capacity`.
+- **MDT client latency** (small-file create rate) — `azure_managed_lustre_mdt_client_latency_milliseconds{operation="create"}`. Look for sustained spikes that would indicate MDT saturation.
+- **Pod logs** — rclone emits one-line stats every 30 s: bytes transferred, throughput, ETA. The phase helper streams these to `reports/<RUN_ID>/blob-ingest-<RUN_ID>.log`.
+
+A throughput-only run record goes to `reports/<RUN_ID>/blob-ingest-<RUN_ID>-summary.txt` with: start time, end time, total objects, total bytes, average throughput, peak throughput, final `du -sh "${DEST}"`, and final `azure_managed_lustre_ost_bytes_used_percent`.
+
+### 14.7 Pass / fail criteria
+
+Scenario F passes when all of the following hold:
+
+1. The Job's pod exits `0` and the Job reaches `Complete=True`.
+2. **Raw-bytes equality**: `find "${DEST}" -type f -printf '%s\n' | awk '{s+=$1}END{print s}'` matches `rclone size az:waymo-v2[/${SOURCE_SUFFIX}] --json | jq -r '.bytes'` to within ± 0.01 % (raw payload bytes; not `du -sh`, which reports Lustre stripe-aligned allocation).
+3. **File count equality**: `find "${DEST}" -type f | wc -l` matches `rclone size --json | jq -r '.count'`.
+4. `azure_managed_lustre_ost_bytes_used_percent` peak during the run stayed `< 80`.
+5. `time() - azure_managed_lustre_last_success_timestamp_seconds < 180` throughout the run.
+6. The 50-file dataset-immutability sample (§ 8.5) re-hashes identically — proves nothing in Leg 2 touched `/mnt/lustre/waymo_v2/`.
+7. No CSI DaemonSet pod restarted during the run.
+
+The throughput numbers are **observed**, not gated, on the first run; record them in the report as baseline. After two passing runs at the same `RCLONE_TRANSFERS`, the observed `Avg MiB/s` can be promoted to a regression SLO (e.g. ≥ 800 MiB/s sustained for the full container on `juicefspool` D8d_v5 at `T=32`).
+
+### 14.8 Abort conditions
+
+Abort and clean up if any of the following fires:
+
+- Pod exits `1` with `ERROR: DEST is inside /mnt/lustre/waymo_v2` — the helper resolved `DEST` incorrectly. Inspect environment, do not retry until fixed.
+- `azure_managed_lustre_ost_bytes_used_percent > 80` — capacity guard. Stop the Job and run the cleanup step (§ 14.9) before any retry.
+- rclone reports `>10` consecutive transfer errors. Capture the rclone log and the workload-identity token-exchange events (`kubectl get events -n lustre-pressure-test --field-selector reason=FailedMount,Unhealthy`).
+- The dataset-immutability re-hash mismatches. **Hard abort** — investigate before any further Lustre write activity.
+
+### 14.9 Cleanup
+
+Per-`RUN_ID` cleanup (run after each Scenario F invocation):
+
+```bash
+# Delete only the Leg-2 ingest tree for this RUN_ID. Re-uses the cleanup Job's
+# safety logic: refuses paths under /mnt/lustre/waymo_v2/ and refuses ancestors
+# of DATASET_ROOT.
+kubectl set env -n lustre-pressure-test job/av-output-cleanup --containers=cleanup \
+   RUN_ID="${RUN_ID}" \
+   RESULT_ROOT=/mnt/lustre/ingest/waymo_v2_blob
+kubectl apply -f deploy/pressure-test/av-output-cleanup-job.yaml
+kubectl wait -n lustre-pressure-test --for=condition=complete \
+   job/av-output-cleanup --timeout=1800s
+kubectl logs -n lustre-pressure-test job/av-output-cleanup
+
+# Optional: delete the Leg-2 Job itself once logs are archived.
+kubectl delete job -n lustre-pressure-test waymo-blob-to-lustre --ignore-not-found
+```
+
+When Scenario F is the **last** scenario run against this filesystem, follow up with the final-state cleanup in § 16 to remove `/mnt/lustre/ingest/` wholesale (covers any stray per-`RUN_ID` trees that may have been skipped).
+
+### 14.10 Report row template
+
+Append a Scenario F entry to the run's `reports/<RUN_BASE>.md`:
+
+```markdown
+## Scenario F — Blob → Lustre ingest (<RUN_ID>)
+- Source: `az:waymo-v2[/<suffix>]`, <object count> objects, <bytes> GiB
+- Destination: `/mnt/lustre/ingest/waymo_v2_blob/<RUN_ID>/`
+- rclone tunings: TRANSFERS=<n>, CHECKERS=<n>, BUFFER_SIZE=<size>
+- Start (UTC) | End (UTC) | Wall-clock | Avg MiB/s | Peak MiB/s
+- Final `du -sh` vs `rclone size`: <delta %>
+- OST used % at start / peak / end
+- MDT p95 create latency at steady-state
+- Dataset immutability re-check: pass / fail
+- Issues, follow-ups
+```
+
+### 14.11 Risks and mitigations
+
+| Risk | Likelihood | Impact | Mitigation |
+| --- | --- | --- | --- |
+| `DEST` resolves under `DATASET_ROOT` due to env mis-set | low | dataset overwrite (critical) | Container-level guard + post-run immutability re-hash gate the run. |
+| rclone `--metadata` writes excessive `mtime`/`xattr` calls and saturates MDT | medium | tail-latency cliff on AV phases that run concurrently | Schedule Scenario F outside the AV phase ladder; do not run concurrently with Phase 9 (`metadata-heavy`). |
+| Workload-identity token expires mid-copy (long runs) | low | rclone 401s, Job retries | Default federated-token refresh window is 1 h; rclone re-reads `AZURE_FEDERATED_TOKEN_FILE` each request via DAC. `--retries 3` (rclone default) tolerates transient 401s. |
+| Same-region Blob → Lustre exceeds the configured AMLFS write SKU envelope | low | sustained backpressure, no data loss | Cap `RCLONE_TRANSFERS` to 32 on the validated SKU (matches existing copy job); raise only with a tested capacity envelope. |
+| Container `waymo-v2` is partially populated when Leg 2 starts | medium | Leg 2 finishes with `<` expected bytes | Pre-flight `rclone size az:waymo-v2` and compare against the Leg 1 run's report before kicking Leg 2. |
+
+---
+
+## 15. Scenario G — 200-client fill-to-ENOSPC
+
+This is a **destructive standalone scenario** that intentionally fills `almfstestcluster02` until at least one OST returns `ENOSPC`. It characterizes the 200-client concurrent-write blast radius, the tail-latency cliff approaching capacity, the per-OST imbalance at high fill, and the recovery time after a scoped cleanup. **Do not run against any filesystem that holds production-relevant data.**
+
+> Scenario G is **not** subject to the 80 % capacity kill switch used by the AV phase ladder. ENOSPC is treated as a **successful** terminal condition.
+
+### 15.1 Goal and rationale
+
+1. **Quantify the 200-client write fan-out** — sustained aggregate write throughput, per-client p95/p99 write latency, MDT create rate under 200-client load.
+2. **Map the tail-latency cliff** — identify the `ost_bytes_used_percent` threshold at which p99 write latency rises sharply (typically 90–95 %).
+3. **Exercise ENOSPC handling end-to-end** — verify that client-side `OSError(ENOSPC)` propagates cleanly, that the workload terminates gracefully, and that the filesystem is recoverable via scoped cleanup without operator intervention beyond `lfs migrate` if OST imbalance persists.
+4. **Validate the multi-PVC fan-out pattern** — confirm that 200 distinct PVCs can be bound to the same Azure Managed Lustre filesystem via 200 PVs sharing the same `volumeHandle`, which is the foundation for any future per-pod-PVC training topology.
+
+### 15.2 Architecture
+
+```mermaid
+flowchart TB
+   subgraph N[juicefspool : ~20 × D8d_v5, autoscaler max=25]
+      direction LR
+      P1[10 pods]
+      P2[10 pods]
+      P3[...]
+      P20[10 pods]
+   end
+   subgraph K[Kubernetes objects]
+      direction TB
+      PVCS["200 × PVC<br/>lustre-fill-pvc-000..199<br/>RWX, 8 TiB each"]
+      PVS["200 × PV<br/>all share volumeHandle<br/>594308f7-40d4-429d-9120-978be2fab316"]
+      PVCS --> PVS
+   end
+   N -->|each pod mounts<br/>its own PVC| K
+   K --> FS[("almfstestcluster02<br/>lustrefs / 10.10.16.5<br/>8 TiB capacity")]
+   FS -.->|metrics| EX[/vmss-metrics-exporter/]
+   EX --> PROM[("Prometheus<br/>AMA managed")]
+   PROM --> GRAF[/Grafana Lustre dashboard/]
+   classDef fs fill:#fee,stroke:#c33,stroke-width:2px;
+   class FS fs;
+```
+
+Key invariants:
+
+- **One filesystem.** All 200 PVCs are backed by the same `almfstestcluster02` AMLFS via 200 distinct PV objects that share `volumeHandle: 594308f7-40d4-429d-9120-978be2fab316`. The PV/PVC names differ; the underlying mount target is identical.
+- **Per-pod result tree.** Each pod writes only to `/mnt/lustre/pressure-tests/fill-results/<RUN_ID>/<pod-name>/`. Different PVCs map to the same shared Lustre namespace, so this per-pod prefix is what guarantees write isolation — not the PVC name.
+- **No reads from `DATASET_ROOT`.** A new `write-only` mode in `av_lustre_workload.py` (see § 15.4) synthesizes payload entirely from in-process pseudorandom bytes and never walks `/mnt/lustre/waymo_v2/`. The three immutability guardrails (`assert_disjoint_roots()`, `ensure_within()`, `FAIL_ON_WRITE_ERROR`) remain active.
+
+### 15.3 Prerequisites
+
+| Asset | State | Notes |
+| --- | --- | --- |
+| AMLFS `almfstestcluster02` | dedicated to this scenario | **must not** hold the production dataset. If `/mnt/lustre/waymo_v2/` is present, an immutability sample must exist before Scenario G runs (§ 15.5). |
+| 200 PVs + 200 PVCs | apply on demand | Generated by `scripts/gen_lustre_fill_pvcs.py` from a single PV/PVC template that mirrors [deploy/pressure-test/pvc-example.yaml](deploy/pressure-test/pvc-example.yaml). Names: `pv-almfstestcluster02-fill-NNN` and `lustre-fill-pvc-NNN` for `NNN = 000..199`. |
+| Node pool `juicefspool` | autoscaler `max-count ≥ 25` | Single command in § 15.6 step 1 raises the cap; revert in cleanup. |
+| ConfigMap `av-lustre-workload-script` | populated with `scripts/av_lustre_workload.py` content that includes the new `write-only` mode | See § 15.4. |
+| ConfigMap `av-lustre-workload-config` | augmented with `WRITE_ONLY_*` keys | See § 15.4. |
+| Grafana Lustre dashboard, AMA Prometheus, [deploy/lustre-alert-rules.yaml](deploy/lustre-alert-rules.yaml) | already installed | No new dashboards or alert rules are added. |
+
+### 15.4 Workload — new `write-only` mode
+
+A new `write-only` mode is added to [scripts/av_lustre_workload.py](scripts/av_lustre_workload.py). It:
+
+- Does **not** walk `DATASET_ROOT`; it does not read any input file.
+- Synthesizes per-file payload from a **deterministic** pod-scoped `random.Random(seed=int.from_bytes(hashlib.sha256(POD_NAME.encode()).digest()[:8], 'big'))`. (Python's built-in `hash()` is salted per interpreter since 3.3; the SHA-256 seed is reproducible across runs.) The generator advances once per chunk — never re-seeded per file — so the same chunk bytes are not emitted twice, which defeats any defensive OST de-dup or compression heuristics.
+- Loops file creation into `RESULT_ROOT/<RUN_ID>/<pod-name>/dir-NNNN/file-MMMMM.bin` (round-robin over `WRITE_ONLY_DIR_FANOUT` subdirs to spread MDT load).
+- Treats **`OSError(errno == ENOSPC)` as terminal-success**: the pod logs the event, emits a final summary with `terminal_reason="enospc"` and `enospc_reached=true`, then exits `0`. Without this special case, every pod would exit non-zero on ENOSPC and the Job would be marked `Failed`.
+- Installs a `SIGTERM` / `SIGINT` handler that flushes the summary JSONL line and then exits `0` with `terminal_reason="sigterm"`. The handler must complete summary emission within the pod's `terminationGracePeriodSeconds` (default 30 s); otherwise the operator loses the partial-run summary. Aggregators count `sigterm` pods toward the run total.
+- Drops latency / throughput samples collected during the first `WARMUP_SECONDS` to keep CSI mount-cold-start outliers out of the per-pod p95/p99 stats. Reuses the existing `WARMUP_SECONDS` config key from § 6.
+- Terminates with `terminal_reason ∈ { "enospc", "target_bytes", "files_per_pod", "sigterm", "completed" }`.
+
+New ConfigMap keys (added to [deploy/pressure-test/av-workload-configmap.yaml](deploy/pressure-test/av-workload-configmap.yaml)):
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `WRITE_ONLY_FILE_SIZE_BYTES` | `64MiB` | Per-file size. |
+| `WRITE_ONLY_TARGET_BYTES_PER_POD` | `0` | Stop after this many bytes written. `0` = unbounded; loop until ENOSPC or SIGTERM. |
+| `WRITE_ONLY_DIR_FANOUT` | `1024` | Number of subdirectories per pod; round-robin assignment. |
+| `WRITE_ONLY_CHUNK_SIZE_BYTES` | `4MiB` | Write buffer size (reuses `CHUNK_SIZE_BYTES` if unset). |
+
+Existing keys reused: `MODE` (set to `write-only`), `POD_NAME`, `POD_COUNT`, `RESULT_ROOT`, `RUN_ID`, `FAIL_ON_WRITE_ERROR` (kept `true` for non-ENOSPC errors), `STATS_INTERVAL_SECONDS`, `MAX_RECORDED_ERRORS`, `WARMUP_SECONDS` (recommended `30` for Scenario G).
+
+Pod summary schema additions (compatible with § 6 — only new fields are added):
+
+```json
+{
+   "event": "summary",
+   "mode": "write-only",
+   "pod": "lustre-fill-NNN-...",
+   "files_written": 1234,
+   "bytes_written": 81604378624,
+   "write_latency_ms": { "p50": 18, "p95": 92, "p99": 410 },
+   "write_throughput_mib_s": { "p50": 31.2, "p95": 12.7 },
+   "warmup_dropped_samples": 47,
+   "enospc_reached": true,
+   "terminal_reason": "enospc"
+}
+```
+
+**Future work (not in scope for this scenario).** Per-pod throughput could be pushed to a Prometheus pushgateway in real time, letting the Grafana dashboard show per-pod variance live without parsing JSONL. Pushgateway is *not* deployed in this cluster today — left as a follow-up.
+
+### 15.5 Pre-flight checks
+
+Run, in order, before any 200-pod run. The shared helper [scripts/lustre_preflight.sh](scripts/lustre_preflight.sh) wraps checks 1, 3, 4, 6, 7 below; commands shown here for clarity.
+
+```bash
+# 0. No other Lustre writer is active. Scenario G must run in isolation —
+#    the AV phase ladder and Scenario F would both saturate the MDT and
+#    skew the fill-curve.
+bash scripts/lustre_preflight.sh --check active-writers \
+   || { echo "ABORT: other writers active"; exit 1; }
+
+# 1. juicefspool autoscaler max-count must be >= 25.
+az aks nodepool show --resource-group aks-test-rg --cluster-name aks-storage-test \
+   --name juicefspool -o json \
+   | jq '{minCount, maxCount, count, enableAutoScaling}'
+
+# 2. /mnt/lustre/waymo_v2/ immutability baseline exists (§ 8.5) if the dataset
+#    is present on the filesystem under test.
+ls -1 reports/dataset-immutability-baseline.tsv 2>/dev/null \
+   || echo "WARN: no baseline; either capture one or confirm the dataset is absent"
+
+# 3. Lustre starting capacity is low. Refuse to start if > 10 %.
+kubectl exec -n default deploy/vmss-metrics-exporter -- \
+   curl -s http://localhost:8000/metrics \
+   | awk '/azure_managed_lustre_ost_bytes_used_percent.*almfstestcluster02/ \
+       { if ($NF > 10) { print "ABORT: used%="$NF" > 10"; exit 1 } else { print "OK used%="$NF } }'
+
+# 4. CSI DaemonSet healthy on all juicefspool nodes.
+kubectl get ds -n kube-system csi-azurelustre-node -o wide
+
+# 5. AMLFS capacity is read from the resource (not hard-coded). The phase helper
+#    populates AMLFS_CAPACITY_BYTES from this query and computes the per-pod
+#    target as ceil((capacity * 1.05) / pod_count) so the aggregate over-shoots
+#    the published capacity by ~5 % to actually trigger ENOSPC.
+az resource show --resource-group LUSTRE-RG --name almfstestcluster02 \
+   --resource-type Microsoft.StorageCache/amlFilesystems --query 'properties.storageCapacityTiB' -o tsv
+
+# 6. CSI multi-mount density on a juicefspool node is sane. The 200/N pods per
+#    node share one CSI DaemonSet pod; verify that pod can hold N concurrent
+#    Lustre mounts (most kernels support hundreds; this catches misconfigured
+#    csi-azurelustre-node resource limits).
+NODE=$(kubectl get nodes -l agentpool=juicefspool -o jsonpath='{.items[0].metadata.name}')
+kubectl exec -n kube-system $(kubectl get pod -n kube-system -l app=csi-azurelustre-node \
+   --field-selector spec.nodeName=$NODE -o jsonpath='{.items[0].metadata.name}') -- \
+   sh -c 'mount -t lustre | wc -l; ulimit -n'
+# Expect: low mount count (0–2 before fan-out) and ulimit -n >= 4096.
+
+# 7. Subnet egress bandwidth headroom. 200 × ~30 MiB/s ≈ 6 GiB/s aggregate.
+#    The Lustre delegated subnet typically supports this on Std_F* tiers but
+#    can be capped on small subnets. Confirm via:
+az network vnet subnet show --resource-group aks-test-rg \
+   --vnet-name <aks-vnet> --name <lustre-subnet> --query 'addressPrefix' -o tsv
+# Cross-reference with the AMLFS SKU envelope (Standard 125: ≈ 1 GiB/s/TiB write;
+# 8 TiB ≈ 1 GiB/s sustained write — 200-client aggregate is bounded by AMLFS,
+# not the subnet).
+
+# 8. 3-PVC volumeHandle-reuse pilot (gates the full 200-PVC apply).
+#    See § 15.6 step 2.
+```
+
+### 15.6 Procedure
+
+**Step 1 — Raise `juicefspool` capacity.**
+
+```bash
+az aks nodepool update \
+   --resource-group aks-test-rg \
+   --cluster-name aks-storage-test \
+   --name juicefspool \
+   --update-cluster-autoscaler \
+   --min-count 2 \
+   --max-count 25
+```
+
+**Step 2 — 3-PVC pilot (gates the full run).** This pilot validates the central design assumption — that the AzureLustre CSI driver tolerates the same `volumeHandle` across multiple PV objects for RWX mounts. As of 2026-05, this is not explicitly documented for the AzureLustre CSI driver; the pilot is the empirical proof.
+
+```bash
+# Generate only the first 3 PV/PVC pairs.
+python scripts/gen_lustre_fill_pvcs.py --count 3 \
+   --out deploy/pressure-test/lustre-fill-pvcs-pilot.yaml
+kubectl apply -f deploy/pressure-test/lustre-fill-pvcs-pilot.yaml
+
+# All 3 PVCs must reach Bound within 60 s.
+kubectl get pvc -n lustre-pressure-test \
+   -l app.kubernetes.io/component=fill -o wide
+
+# Run a single fill pod against lustre-fill-pvc-000, target 1 GiB.
+PILOT_RUN_ID="fill-pilot-$(date -u +%Y%m%d-%H%M)"
+python scripts/gen_lustre_fill_pvcs.py --jobs --count 1 \
+   --run-id "${PILOT_RUN_ID}" \
+   --target-bytes-per-pod 1073741824 \
+   --out deploy/pressure-test/lustre-fill-job-pilot.yaml
+kubectl apply -f deploy/pressure-test/lustre-fill-job-pilot.yaml
+kubectl wait -n lustre-pressure-test --for=condition=complete \
+   job/lustre-fill-000 --timeout=600s
+kubectl logs -n lustre-pressure-test job/lustre-fill-000 | tail -30
+```
+
+Expected pilot outcomes:
+
+| Check | Pass | Fail action |
+| --- | --- | --- |
+| 3 PVCs all `Bound` | yes → proceed to step 3 | If any PVC stuck `Pending` with CSI `volumeHandle` conflict, switch to the **subPath fallback** (§ 15.6.alt below) and re-document the deviation. |
+| Pilot pod exits `0` with `bytes_written ≈ 1 GiB` | yes → proceed | Investigate CSI / Lustre client errors before any 200-pod run. |
+| Dataset immutability re-hash unchanged | yes → proceed | Hard abort. |
+
+#### 15.6.alt subPath fallback procedure
+
+If the pilot above shows the AzureLustre CSI driver rejects duplicate `volumeHandle` across multiple PVs, fall back to **one shared PVC with per-pod `subPath`**. This loses the per-pod-PVC characterization (objective 4 in § 15.1) but preserves the 200-client fan-out test (objectives 1–3). The scenario report **must** record that fallback was used.
+
+1. Skip step 3 (`gen_lustre_fill_pvcs.py --count 200`). The existing `lustre-pressure-test-pvc` covers all 200 pods.
+2. Generate per-pod Jobs with `--mode subpath`:
+   ```bash
+   python scripts/gen_lustre_fill_pvcs.py --jobs --count 200 \
+      --mode subpath \
+      --shared-pvc lustre-pressure-test-pvc \
+      --run-id "${RUN_ID}" \
+      --target-bytes-per-pod 42949672960 \
+      --out deploy/pressure-test/lustre-fill-jobs-${RUN_ID}.yaml
+   ```
+   In subpath mode, each Job mounts `lustre-pressure-test-pvc` at `/mnt/lustre` with `subPath: pressure-tests/fill-results/<RUN_ID>/lustre-fill-NNN` so the pod sees only its own subdirectory.
+3. The rest of § 15 procedure (steps 4 onward), monitoring, pass/fail, abort, cleanup applies unchanged. Cleanup is simpler: only `lustre-pressure-test-pvc` exists; no 200-PVC tear-down.
+4. Report § 15.10 row sets `Fallback used? = yes` and notes "AzureLustre CSI driver rejected duplicate volumeHandle".
+
+**Step 3 — Apply all 200 PVCs.**
+
+```bash
+python scripts/gen_lustre_fill_pvcs.py --count 200 \
+   --out deploy/pressure-test/lustre-fill-pvcs.yaml
+kubectl apply -f deploy/pressure-test/lustre-fill-pvcs.yaml
+
+# Confirm all 200 reach Bound (allow up to 5 min for CSI to enumerate).
+kubectl get pvc -n lustre-pressure-test \
+   -l app.kubernetes.io/component=fill -o json \
+   | jq '.items | length, [.[].status.phase] | unique'
+# Expect: 200, ["Bound"]
+```
+
+**Step 4 — Launch the 200-pod fill run.**
+
+```bash
+RUN_ID="fill-200-$(date -u +%Y%m%d-%H%M)"
+mkdir -p "reports/${RUN_ID}"
+
+# Per-pod target ≈ 40 GiB × 200 ≈ 8 TiB. The first pods to ENOSPC will
+# typically finish well below 40 GiB; the rest write what they can.
+bash scripts/av_lustre_fill_phase.sh \
+   --run-id "${RUN_ID}" \
+   --pod-count 200 \
+   --target-bytes-per-pod 42949672960 \
+   --output-dir "reports/${RUN_ID}" \
+   --timeout 4h
+```
+
+The phase helper does:
+
+1. Generates `deploy/pressure-test/lustre-fill-jobs-<RUN_ID>.yaml` — 200 single-pod Jobs (`parallelism=1, completions=1`), one per PVC, each setting `MODE=write-only`, `RESULT_ROOT=/mnt/lustre/pressure-tests/fill-results/${RUN_ID}`, the per-pod target, and `nodeSelector: kubernetes.azure.com/agentpool=juicefspool`. **No pod anti-affinity** — packing ~10 pods/node is intentional.
+2. `kubectl apply -f` the manifest.
+3. Polls Job conditions every 10 s; takes a Prometheus snapshot of the queries in § 15.7 every 30 s and writes them to `reports/${RUN_ID}/fill-prom-snapshots.jsonl`.
+4. On each Job reaching `Complete=True` or `Failed=True`, collects its pod's summary line and appends to `reports/${RUN_ID}/fill-pod-summaries.jsonl`.
+5. Aggregates into `reports/${RUN_ID}/aggregate-summary.json` with: pods that reached ENOSPC, pods that hit `target_bytes`, total `bytes_written`, p50/p95/p99 of per-pod `bytes_written`, per-pod p95 write latency, total wall-clock.
+
+**Step 5 — Capture post-run Lustre state.**
+
+```bash
+# OST imbalance snapshot.
+kubectl exec -n default deploy/vmss-metrics-exporter -- \
+   curl -s http://localhost:8000/metrics \
+   | grep azure_managed_lustre_ost_bytes_used_percent \
+   > "reports/${RUN_ID}/post-run-ost-percent.txt"
+
+# Dataset immutability re-check (if a baseline exists).
+kubectl apply -f deploy/pressure-test/av-dataset-discovery-job.yaml
+# ... follow § 8.4 to diff sample against baseline ...
+```
+
+### 15.7 Monitoring and observability
+
+Live monitoring queries (the phase helper samples these every 30 s):
+
+```promql
+# Fill curve — primary success indicator.
+max by (filesystem_name) (
+   azure_managed_lustre_ost_bytes_used_percent{filesystem_name="almfstestcluster02"}
+)
+
+# Aggregate write throughput from all 200 clients.
+sum by (filesystem_name) (
+   azure_managed_lustre_client_write_throughput_bytes_per_second{filesystem_name="almfstestcluster02"}
+)
+
+# Per-OST fill (look for imbalance > 5 %).
+azure_managed_lustre_ost_bytes_used_percent{filesystem_name="almfstestcluster02"}
+
+# MDT create latency tail (200-client metadata pressure).
+max by (operation) (
+   azure_managed_lustre_mdt_client_latency_milliseconds{filesystem_name="almfstestcluster02", operation="create"}
+)
+
+# AKS scale-out — juicefspool node count should converge to ~20.
+azure_vmss_instance_count{vmss_name=~".*juicefspool.*"}
+
+# Exporter freshness (must stay below 180 s).
+time() - azure_managed_lustre_last_success_timestamp_seconds
+```
+
+Open the existing Lustre Grafana dashboard ([deploy/grafana-dashboard-lustre.json](deploy/grafana-dashboard-lustre.json)) with the run's start/end timestamps. The dashboard's existing panels (capacity, throughput, latency, MDT pressure) already cover the queries above; no new panels are added for this scenario.
+
+Annotate the dashboard with the run's `RUN_ID` for retrospective comparison. The phase helper emits the dashboard URL to `reports/${RUN_ID}/grafana-url.txt` at run start.
+
+### 15.8 Pass / fail criteria
+
+Scenario G passes when all of the following hold:
+
+1. **At least one** pod summary reports `terminal_reason="enospc"` and `enospc_reached=true`, with exit code `0`. (Hitting ENOSPC is the success terminal in this scenario. AMLFS may trigger ENOSPC at the OST quota threshold — typically 95–98 % — rather than literal 100 %; the criterion is the ENOSPC event, not a specific percent-used number.)
+2. Aggregate `bytes_written` across all 200 pod summaries is **≥ 0.93 × AMLFS_CAPACITY_BYTES** (allowing slack for OST imbalance and MDT overhead). For an 8 TiB FS this is ≥ 7.44 TiB.
+3. No pod exits with code `3` (path-gate escape — would indicate a write outside `RESULT_ROOT/<RUN_ID>/<pod-name>/`).
+4. **Dataset immutability re-hash unchanged** if a baseline exists for `/mnt/lustre/waymo_v2/`. **Hard requirement.**
+5. `time() - azure_managed_lustre_last_success_timestamp_seconds < 180` throughout the run.
+6. `rate(azure_managed_lustre_collection_errors_total[5m]) == 0` throughout the run.
+7. No `juicefspool` node went `NotReady` and no CSI DaemonSet pod restarted.
+8. Cleanup (§ 15.9) completes and `azure_managed_lustre_ost_bytes_used_percent < 10` within 60 min of cleanup start.
+
+> **Resolution caveat.** The exporter polls Lustre metrics every `POLL_INTERVAL_SECONDS` (default `60`). Scenario G's fill curve from ≈ 0 % to ENOSPC typically completes in 5–15 minutes, which is only 5–15 metric samples wide. To resolve the latency cliff better, optionally lower the exporter poll interval for the duration of the run:
+>
+> ```bash
+> kubectl set env -n default deploy/vmss-metrics-exporter POLL_INTERVAL_SECONDS=15
+> kubectl rollout status -n default deploy/vmss-metrics-exporter --timeout=120s
+> # ... run Scenario G ...
+> kubectl set env -n default deploy/vmss-metrics-exporter POLL_INTERVAL_SECONDS-
+> kubectl rollout status -n default deploy/vmss-metrics-exporter --timeout=120s
+> ```
+>
+> Restore the default after the run. AMLFS metric ingestion has a 60 s nominal rate; sub-60 s polls produce duplicate samples in Azure Monitor but are tolerated by the exporter.
+
+Observed-only metrics (recorded, not gated, on the first run; promoted to SLO after two passing runs):
+
+| Metric | First-run baseline expected |
+| --- | --- |
+| Aggregate write throughput plateau (MiB/s) | record |
+| Per-pod p95 write latency at 50 % fill | record |
+| Per-pod p95 write latency at 90 % fill | record (cliff point) |
+| Per-pod p99 write latency at 95 % fill | record |
+| OST imbalance at first-ENOSPC (max minus min OST used %) | record |
+| Time from first-ENOSPC to last-ENOSPC across all pods | record |
+| Recovery wall-clock from cleanup start to `< 10 %` used | record |
+
+### 15.9 Abort and cleanup
+
+Abort conditions (any one triggers immediate Job deletion and forced cleanup):
+
+- Dataset immutability re-hash mismatches mid-run.
+- A pod exits with code `3` (path-gate escape).
+- More than 5 pods exit with a non-ENOSPC error in the first 5 min (likely a CSI mount or RBAC issue — the scenario should be re-pre-flighted before retry).
+- An AKS node goes `NotReady`.
+
+Cleanup procedure (run unconditionally at end of scenario):
+
+```bash
+# 1. Delete all 200 fill Jobs (force-stops any pod still writing).
+kubectl delete -n lustre-pressure-test \
+   -f deploy/pressure-test/lustre-fill-jobs-${RUN_ID}.yaml --ignore-not-found
+
+# 2. Scoped cleanup of RESULT_ROOT/<RUN_ID> via the existing cleanup Job.
+#    Lustre rm is metadata-bound — keep this single-pod (NOT parallelized).
+kubectl set env -n lustre-pressure-test job/av-output-cleanup --containers=cleanup \
+   RUN_ID="${RUN_ID}" \
+   RESULT_ROOT=/mnt/lustre/pressure-tests/fill-results
+kubectl apply -f deploy/pressure-test/av-output-cleanup-job.yaml
+# Cleanup can take 30–60 min at 8 TiB / many small files.
+kubectl wait -n lustre-pressure-test --for=condition=complete \
+   job/av-output-cleanup --timeout=7200s
+kubectl logs -n lustre-pressure-test job/av-output-cleanup | tail -20
+
+# 3. Delete the 200 PVCs **and** their PVs. Reclaim policy is Retain (set by
+#    gen_lustre_fill_pvcs.py because Delete on a static shared-volumeHandle PV
+#    would attempt to destroy the AMLFS itself). We must explicitly delete the
+#    PV objects, otherwise 200 'Released' PVs accumulate per re-run.
+kubectl delete -f deploy/pressure-test/lustre-fill-pvcs.yaml --ignore-not-found
+kubectl delete pv -l app.kubernetes.io/component=fill --ignore-not-found
+# Confirm zero leftovers.
+kubectl get pv -l app.kubernetes.io/component=fill -o name | wc -l   # expect 0
+kubectl get pvc -n lustre-pressure-test -l app.kubernetes.io/component=fill -o name | wc -l   # expect 0
+
+# 4. Verify Lustre is back to baseline.
+kubectl exec -n default deploy/vmss-metrics-exporter -- \
+   curl -s http://localhost:8000/metrics \
+   | grep azure_managed_lustre_ost_bytes_used_percent
+
+# 5. Revert juicefspool autoscaler cap.
+az aks nodepool update \
+   --resource-group aks-test-rg \
+   --cluster-name aks-storage-test \
+   --name juicefspool \
+   --update-cluster-autoscaler \
+   --min-count 2 \
+   --max-count 20
+
+# 6. Restore exporter POLL_INTERVAL_SECONDS if it was lowered for the run
+#    (see § 15.8 resolution caveat).
+kubectl set env -n default deploy/vmss-metrics-exporter POLL_INTERVAL_SECONDS-
+kubectl rollout status -n default deploy/vmss-metrics-exporter --timeout=120s
+```
+
+If post-cleanup `ost_bytes_used_percent` does not drop below 10 % within 60 min, OST imbalance likely requires operator intervention. Run `lfs migrate` from a transient Lustre-client pod to rebalance:
+
+```bash
+# Identify imbalanced files (largest first):
+kubectl run lfs-rebalance --rm -it --restart=Never \
+   -n lustre-pressure-test --image=ubuntu:22.04 \
+   --overrides='{"apiVersion":"v1","spec":{"nodeSelector":{"kubernetes.azure.com/agentpool":"juicefspool"},"containers":[{"name":"lfs","image":"ubuntu:22.04","command":["bash","-c","apt-get update && apt-get install -y lustre-client && lfs df -h /mnt/lustre && lfs find /mnt/lustre/waymo_v2 -type f -size +100M | head -50"],"volumeMounts":[{"name":"lustre","mountPath":"/mnt/lustre"}]}],"volumes":[{"name":"lustre","persistentVolumeClaim":{"claimName":"lustre-pressure-test-pvc"}}]}}'
+
+# Re-stripe imbalanced files across all OSTs (count = number of OSTs).
+# DO NOT touch /mnt/lustre/waymo_v2/ unless its OSTs are the imbalanced ones.
+# Substitute -c <ost_count> and -i -1 to round-robin starting at any OST.
+#   lfs find /mnt/lustre/<root> -type f -size +100M -print0 \
+#     | xargs -0 -n10 -P4 lfs migrate -c -1 -i -1
+```
+
+If imbalance persists after `lfs migrate`, capture support-case artifacts:
+
+```bash
+kubectl logs -n kube-system -l app=csi-azurelustre-node --tail=2000 \
+   > "reports/${RUN_ID}/csi-logs.txt"
+kubectl get events -n lustre-pressure-test --sort-by=.lastTimestamp \
+   > "reports/${RUN_ID}/events.txt"
+```
+
+When Scenario G is the **last** scenario run against this filesystem, follow up with the final-state cleanup in § 16 to remove `/mnt/lustre/pressure-tests/` wholesale and verify the keep-only-`waymo_v2/` invariant.
+
+### 15.10 Report row template
+
+Append to `reports/${RUN_ID}/run-summary.md`:
+
+```markdown
+## Scenario G — 200-client fill-to-ENOSPC (<RUN_ID>)
+
+### Topology
+- AMLFS: almfstestcluster02 (lustrefs, 10.10.16.5, 8 TiB)
+- PVC fan-out: 200 RWX PVCs sharing volumeHandle 594308f7-40d4-429d-9120-978be2fab316
+- Fallback used? (yes / no — if yes, single-PVC subPath model)
+- juicefspool: <N> nodes × Standard_D8d_v5, autoscaler max=25
+
+### Outcome
+- First-ENOSPC reached at: <UTC timestamp>
+- Pods reaching ENOSPC: <n> / 200
+- Pods hitting target_bytes before ENOSPC: <n> / 200
+- Pods failing (non-ENOSPC): <n> / 200
+- Aggregate bytes_written: <bytes> (<TiB>)
+- Total wall-clock: <h:mm:ss>
+
+### Throughput
+- Aggregate write throughput plateau: <MiB/s>
+- Per-pod median throughput: <MiB/s>
+- Per-pod p5 throughput (slowest): <MiB/s>
+
+### Latency cliff
+- Per-pod p95 write latency at 50 % fill: <ms>
+- Per-pod p95 write latency at 90 % fill: <ms>
+- Per-pod p99 write latency at 95 % fill: <ms>
+- Cliff inflection point (% fill at which p99 doubles): <pct>
+
+### Capacity and imbalance
+- OST used % at first-ENOSPC: max=<%> min=<%> imbalance=<%>
+- Time from first-ENOSPC to last-ENOSPC: <mm:ss>
+
+### Recovery
+- Cleanup wall-clock: <h:mm:ss>
+- ost_bytes_used_percent at cleanup-end: <%>
+- Operator intervention required? (yes / no — if yes, what)
+
+### Dataset immutability
+- Baseline location: reports/dataset-immutability-baseline.tsv
+- Re-check result: pass / fail
+```
+
+### 15.11 Risks and mitigations
+
+| Risk | Likelihood | Impact | Mitigation |
+| --- | --- | --- | --- |
+| AzureLustre CSI rejects duplicate `volumeHandle` across 200 PVs | medium | scenario cannot run in 200-PVC mode | 3-PVC pilot (§ 15.6 step 2) gates the full apply. Documented subPath fallback preserves the test envelope. |
+| 200-pod scheduling stalls on `juicefspool` (not enough nodes provisioned) | medium | partial Job apply, skewed results | Autoscaler `max=25` plus a wait-for-nodes preflight in `av_lustre_fill_phase.sh`. Re-run only after `kubectl get nodes -l agentpool=juicefspool` shows ≥ 20 Ready. |
+| OST imbalance persists post-cleanup; FS unusable until operator runs `lfs migrate` | medium | downtime on the shared test FS | Schedule scenario in a maintenance window; notify storage stakeholders; capture support-case artifacts (§ 15.9 last block) if `< 10 %` is not reached. |
+| ENOSPC corrupts in-flight writes on other clients (none expected — Scenario G is the only writer) | low | data loss | Hard requirement: no other write workload runs concurrently against `almfstestcluster02`. Verify with `kubectl get pods -A -o wide` and the `azure_managed_lustre_client_write_ops` rate before kickoff. |
+| Pod-side memory pressure from `write-only` payload generator at 10 pods/node | low | OOM kills, partial fills | Per-pod memory limit `1 GiB`; chunk buffer 4 MiB; pseudorandom payload generator allocates O(chunk) memory only. |
+| Cleanup takes much longer than expected (many small files × MDT-bound rm) | high | scenario blocks subsequent runs | `WRITE_ONLY_FILE_SIZE_BYTES=64MiB` default (cleanup-friendly file count ≈ 130k for 8 TiB). Cleanup Job has `--timeout 7200s`. Do not parallelize cleanup. |
+| Workload-identity drift (none required here — Scenario G uses no Azure-side auth) | n/a | n/a | Scenario G uses Lustre client only; no Azure RBAC required beyond what CSI needs. |
+| Re-running Scenario G without reverting `juicefspool` `max-count` leaves the cluster oversized | low | extra spend | Cleanup step 5 explicitly reverts; report row records the final state. |
+
+### 15.12 Out of scope
+
+The following are **explicitly not** covered by Scenario G:
+
+- Provisioning multiple AMLFS instances.
+- Validating Lustre HSM (HSM is orthogonal to the fill behaviour under test).
+- Cross-region or cross-AZ failover.
+- New Grafana dashboards or alert rules — Scenario G reuses [deploy/grafana-dashboard-lustre.json](deploy/grafana-dashboard-lustre.json) and [deploy/lustre-alert-rules.yaml](deploy/lustre-alert-rules.yaml) unchanged.
+- Mixed-workload concurrent runs with the AV phase ladder (§ 7) — Scenario G must run in isolation against a dedicated AMLFS.
+
+---
+
+## 16. Final filesystem state — keep only `/mnt/lustre/waymo_v2/`
+
+After **all** tests across the runbook (AV phase ladder § 7, Scenario F § 14, Scenario G § 15) complete, the filesystem must be restored to a single canonical state:
+
+> **Invariant**: the only operator-owned content under `/mnt/lustre/` is `/mnt/lustre/waymo_v2/` (the immutable Waymo Open Dataset v2.0.1 tree). All other test artefacts — pressure-test results, blob ingest trees, and any ad-hoc directories created during testing — are removed.
+
+Lustre-internal entries (`lost+found`, `.lustre/`) are filesystem-owned and **never** touched. The 50-file dataset-immutability sample at `reports/<run-base>/dataset-immutability-baseline.tsv` must continue to match `/mnt/lustre/waymo_v2/` exactly after this step.
+
+### 16.1 Allow-list and deny-list
+
+| Path | Disposition | Owner |
+| --- | --- | --- |
+| `/mnt/lustre/waymo_v2/` | **keep** | dataset (immutable) |
+| `/mnt/lustre/lost+found/` | **keep** (do not touch) | Lustre |
+| `/mnt/lustre/.lustre/` | **keep** (do not touch) | Lustre |
+| `/mnt/lustre/pressure-tests/` | remove (all AV phase RESULT_ROOT and Scenario G fill-results) | runbook |
+| `/mnt/lustre/ingest/` | remove (all Scenario F blob → Lustre ingest trees) | runbook |
+| anything else at the top level of `/mnt/lustre/` | remove **only after explicit operator review** | unknown |
+
+The cleanup procedure below is **two-stage**: scoped removal of the two known result roots is unconditional; removal of any unknown top-level entry requires a printed allow-list confirmation in the pod log before the operator re-runs the script with `CONFIRM_UNKNOWN=yes`.
+
+### 16.2 Pre-cleanup verification
+
+Run these checks before the final cleanup. They confirm the filesystem matches the expected pre-cleanup shape — surprise top-level entries usually indicate a misconfigured `RESULT_ROOT` or a stray manual write.
+
+```bash
+# 0. No writer is currently active. The final cleanup must not race with any
+#    AV phase Job, waymo-blob-to-lustre Job, or lustre-fill-* Job.
+bash scripts/lustre_preflight.sh --check active-writers \
+   || { echo "ABORT: writers active; cancel them before final cleanup"; exit 1; }
+
+# 1. Top-level directory listing — there should be no surprises.
+kubectl run lustre-ls --rm -it --restart=Never \
+   -n lustre-pressure-test \
+   --image=python:3.12-slim \
+   --overrides='{"apiVersion":"v1","spec":{"nodeSelector":{"kubernetes.azure.com/agentpool":"juicefspool"},"containers":[{"name":"lustre-ls","image":"python:3.12-slim","command":["sh","-c","ls -la /mnt/lustre; du -sh /mnt/lustre/*/ 2>/dev/null"],"volumeMounts":[{"name":"lustre","mountPath":"/mnt/lustre"}]}],"volumes":[{"name":"lustre","persistentVolumeClaim":{"claimName":"lustre-pressure-test-pvc"}}]}}'
+# Expected top-level entries: waymo_v2/, pressure-tests/, ingest/, lost+found/, .lustre/
+# .lustre/ may be hidden on the client view (depends on Lustre client mount opts);
+# its absence is OK.
+# Anything else => investigate before § 16.3.
+
+# 2. Capacity baseline before cleanup — record for the report.
+kubectl exec -n default deploy/vmss-metrics-exporter -- \
+   curl -s http://localhost:8000/metrics \
+   | grep 'azure_managed_lustre_ost_bytes_used_percent.*almfstestcluster02'
+```
+
+### 16.3 Final cleanup procedure
+
+Run the existing scoped per-`RUN_ID` cleanup for every test run first (§ 13 step 1, Scenarios F § 14.9 and G § 15.9). Then run **one final pass** that removes the known result roots wholesale, in case any per-`RUN_ID` cleanup was skipped or partially completed.
+
+The script is idempotent: re-running after success is safe (missing directories are reported and skipped rather than crashing). Output is teed to `reports/<run-base>/final-cleanup.log` for audit.
+
+```bash
+# Stream cleanup output to the audit log alongside live console.
+mkdir -p "reports/${RUN_BASE}"
+
+# A. Wholesale removal of the two known result roots. Inline Python uses the
+#    same safety pattern as deploy/pressure-test/av-output-cleanup-job.yaml:
+#    refuse to touch /mnt/lustre/waymo_v2/, /mnt/lustre/lost+found/,
+#    /mnt/lustre/.lustre/, or any ancestor of /mnt/lustre/waymo_v2/.
+#    Idempotent: missing entries are reported and skipped.
+kubectl run lustre-final-cleanup --rm -i --restart=Never \
+   -n lustre-pressure-test \
+   --image=python:3.12-slim \
+   --overrides='{"apiVersion":"v1","spec":{"nodeSelector":{"kubernetes.azure.com/agentpool":"juicefspool"},"activeDeadlineSeconds":14400,"containers":[{"name":"cleanup","image":"python:3.12-slim","env":[{"name":"DATASET_ROOT","value":"/mnt/lustre/waymo_v2"},{"name":"CONFIRM_UNKNOWN","value":"no"}],"command":["python","-c","import os, shutil, sys\nfrom pathlib import Path\nLUSTRE = Path(\"/mnt/lustre\").resolve()\nDATASET = Path(os.environ[\"DATASET_ROOT\"]).resolve()\nKEEP = {DATASET, LUSTRE/\"lost+found\", LUSTRE/\".lustre\"}\nKNOWN = {LUSTRE/\"pressure-tests\", LUSTRE/\"ingest\"}\nconfirm_unknown = os.environ.get(\"CONFIRM_UNKNOWN\", \"no\").lower() == \"yes\"\nif not LUSTRE.is_dir():\n    sys.exit(f\"/mnt/lustre not mounted: {LUSTRE}\")\nif not DATASET.is_dir():\n    sys.exit(f\"DATASET_ROOT missing, refusing to run: {DATASET}\")\ntop = sorted(p for p in LUSTRE.iterdir())\nprint(f\"top-level entries under /mnt/lustre: {[p.name for p in top]}\")\nfor p in top:\n    rp = p.resolve()\n    if rp == DATASET or DATASET in rp.parents or rp in DATASET.parents:\n        if rp in KEEP:\n            print(f\"KEEP: {p}\")\n            continue\n        sys.exit(f\"refusing to act on {p} (overlaps DATASET_ROOT)\")\n    if rp in KEEP:\n        print(f\"KEEP: {p}\")\n        continue\n    if rp in KNOWN:\n        if not p.exists():\n            print(f\"SKIP (already gone): {p}\")\n            continue\n        print(f\"REMOVE: {p}\")\n        shutil.rmtree(p)\n        continue\n    if confirm_unknown:\n        if not p.exists():\n            print(f\"SKIP (already gone): {p}\")\n            continue\n        print(f\"REMOVE (unknown, confirmed): {p}\")\n        shutil.rmtree(p)\n    else:\n        print(f\"SKIP (unknown, set CONFIRM_UNKNOWN=yes to remove): {p}\")\nprint(\"final cleanup complete\")\n"],"volumeMounts":[{"name":"lustre","mountPath":"/mnt/lustre"}]}],"volumes":[{"name":"lustre","persistentVolumeClaim":{"claimName":"lustre-pressure-test-pvc"}}]}}' \
+   2>&1 | tee "reports/${RUN_BASE}/final-cleanup.log"
+```
+
+Review the pod log. The expected lines on a fresh post-AV+F+G run are:
+
+```
+top-level entries under /mnt/lustre: ['.lustre', 'ingest', 'lost+found', 'pressure-tests', 'waymo_v2']
+KEEP: /mnt/lustre/.lustre
+REMOVE: /mnt/lustre/ingest
+KEEP: /mnt/lustre/lost+found
+REMOVE: /mnt/lustre/pressure-tests
+KEEP: /mnt/lustre/waymo_v2
+final cleanup complete
+```
+
+If the log shows `SKIP (unknown, ...)` lines, **stop**. Inspect those paths via the § 16.2 listing pod, confirm they are safe to delete, then re-run the cleanup with `CONFIRM_UNKNOWN=yes` in the env. **Never** set `CONFIRM_UNKNOWN=yes` blindly — it bypasses the unknown-path safety check.
+
+#### 16.3.alt Lustre-native batch delete (faster, optional)
+
+`shutil.rmtree` is single-threaded and metadata-bound; at 8 TiB it can take 30–90 min. The Lustre `lfs find ... -delete` operation is Lustre-aware and typically 3–10× faster because it can batch metadata operations. Use this for large `RESULT_ROOT` trees once the inline Python pass has confirmed only `pressure-tests/` and `ingest/` are present at the top level:
+
+```bash
+# Pre-stage a transient Lustre-client pod (provides /usr/bin/lfs).
+kubectl run lfs-batch-rm --rm -it --restart=Never \
+   -n lustre-pressure-test --image=ubuntu:22.04 \
+   --overrides='{"apiVersion":"v1","spec":{"nodeSelector":{"kubernetes.azure.com/agentpool":"juicefspool"},"activeDeadlineSeconds":14400,"containers":[{"name":"lfs","image":"ubuntu:22.04","command":["bash","-c","set -e; apt-get update -qq && apt-get install -y -qq lustre-client; for d in /mnt/lustre/pressure-tests /mnt/lustre/ingest; do if [ -d \"$d\" ]; then echo \"deleting $d via lfs find\"; lfs find \"$d\" -type f -print0 | xargs -0 -P4 -n1000 rm -f; lfs find \"$d\" -depth -type d -empty -delete; rmdir \"$d\" 2>/dev/null || true; else echo \"$d absent\"; fi; done"],"volumeMounts":[{"name":"lustre","mountPath":"/mnt/lustre"}]}],"volumes":[{"name":"lustre","persistentVolumeClaim":{"claimName":"lustre-pressure-test-pvc"}}]}}' \
+   2>&1 | tee -a "reports/${RUN_BASE}/final-cleanup.log"
+```
+
+This path is **dangerous** if used outside this specific shape — it hard-codes the two known result roots and refuses any other argument. Do not generalise it.
+
+Deletion of `/mnt/lustre/pressure-tests/` and `/mnt/lustre/ingest/` via the inline Python fallback may take 30–90 min at 8 TiB / many small files. The pod uses `activeDeadlineSeconds: 14400` (4 h) as a hard cap.
+
+### 16.4 Post-cleanup verification
+
+All of the following must hold before the runbook is considered closed:
+
+```bash
+# 1. Only the expected top-level entries remain.
+kubectl run lustre-ls --rm -it --restart=Never \
+   -n lustre-pressure-test \
+   --image=python:3.12-slim \
+   --overrides='{"apiVersion":"v1","spec":{"nodeSelector":{"kubernetes.azure.com/agentpool":"juicefspool"},"containers":[{"name":"lustre-ls","image":"python:3.12-slim","command":["sh","-c","ls -la /mnt/lustre"],"volumeMounts":[{"name":"lustre","mountPath":"/mnt/lustre"}]}],"volumes":[{"name":"lustre","persistentVolumeClaim":{"claimName":"lustre-pressure-test-pvc"}}]}}'
+# Expected: only waymo_v2/, lost+found/, optionally .lustre/.
+
+# 2a. Dataset immutability re-hash matches the baseline EXACTLY.
+#     Re-run the 50-file sample script from § 8.5 against /mnt/lustre/waymo_v2/
+#     and diff against reports/<run-base>/dataset-immutability-baseline.tsv.
+#     Any mismatch => hard failure of the runbook; investigate before declaring done.
+
+# 2b. Total file count and total bytes under /mnt/lustre/waymo_v2/ match the
+#     baseline from phase 1 discovery. Catches accidental EXTRA files added
+#     outside the 50-file sample (which 2a alone would miss).
+#     Expected per phase-1 discovery: 19,618 files, 682.62 GiB = 733,019,484,365 bytes.
+kubectl run waymo-tally --rm -it --restart=Never \
+   -n lustre-pressure-test --image=python:3.12-slim \
+   --overrides='{"apiVersion":"v1","spec":{"nodeSelector":{"kubernetes.azure.com/agentpool":"juicefspool"},"containers":[{"name":"tally","image":"python:3.12-slim","command":["sh","-c","find /mnt/lustre/waymo_v2 -type f | wc -l; find /mnt/lustre/waymo_v2 -type f -printf %s\\\\n | awk \"{s+=$1}END{print s}\""],"volumeMounts":[{"name":"lustre","mountPath":"/mnt/lustre","readOnly":true}]}],"volumes":[{"name":"lustre","persistentVolumeClaim":{"claimName":"lustre-pressure-test-pvc"}}]}}'
+# Compare both numbers against the phase-1 discovery report. Mismatch => hard failure.
+
+# 3. Capacity dropped to dataset-only footprint.
+kubectl exec -n default deploy/vmss-metrics-exporter -- \
+   curl -s http://localhost:8000/metrics \
+   | grep 'azure_managed_lustre_ost_bytes_used_percent.*almfstestcluster02'
+# Expected: roughly (683 GiB / 8 TiB) ≈ 8.3 %, within a few percent of the
+# pre-test baseline captured in § 8.0.
+
+# 4. No Lustre client OST or MDT shows leftover capacity above the dataset
+#    footprint (catches OST imbalance from Scenario G that needs lfs migrate).
+kubectl exec -n default deploy/vmss-metrics-exporter -- \
+   curl -s http://localhost:8000/metrics \
+   | grep -E 'azure_managed_lustre_(ost|mdt)_bytes_used_percent'
+# Each OST and MDT should be within ±2 % of the others.
+```
+
+If OST imbalance persists after the bulk removal (any single OST `> mean + 5 %`), run the `lfs migrate` recipe in § 15.9 or open a support case with the AMLFS team. The runbook's final state is **not** considered restored until OST balance is within tolerance, the dataset file count and total bytes match the baseline, and the 50-file immutability re-hash matches.
+
+### 16.5 Report row
+
+Append to the final `reports/<run-base>/run-summary.md`:
+
+```markdown
+## Final filesystem state (§ 16)
+- Top-level entries under /mnt/lustre/ after cleanup: <list>
+- Dataset immutability re-hash vs baseline: pass / fail
+- ost_bytes_used_percent before / after / delta
+- Per-OST max minus min used %: <pct>
+- Unknown top-level entries encountered (CONFIRM_UNKNOWN required)? yes / no — if yes: <list and disposition>
+- Operator follow-up required (lfs migrate, support case)? yes / no
+```
+
+### 16.6 What not to do
+
+- **Do not** `rm -rf /mnt/lustre/*` from a privileged shell. That removes `/mnt/lustre/waymo_v2/` and violates the runbook's primary invariant.
+- **Do not** delete `/mnt/lustre/lost+found/` or `/mnt/lustre/.lustre/`. They are Lustre-internal and required for `fsck`-like recovery.
+- **Do not** parallelize the final cleanup across multiple pods. Lustre `rm` is MDT-bound; multi-client `rm` adds metadata contention without improving wall-clock.
+- **Do not** run the final cleanup while any AV phase, Scenario F, or Scenario G workload is still active. The script does not coordinate with running writers.

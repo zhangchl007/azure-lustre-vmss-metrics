@@ -82,6 +82,16 @@ data:
   # The simulator automatically excludes RESULT_ROOT so output writes are not
   # read back during the same run.
   EXCLUDE_PATHS: "/mnt/lustre/pressure-tests"
+
+  # ---- write-only mode (Scenario G, docs § 15) ------------------------------
+  # Used only when MODE=write-only. Synthesizes payload directly into
+  # RESULT_ROOT/<RUN_ID>/<pod-name>/dir-NNNN/file-MMMMM.bin without reading
+  # DATASET_ROOT. ENOSPC on write is treated as terminal-success (exit 0).
+  WRITE_ONLY_FILE_SIZE_BYTES: "64MiB"
+  WRITE_ONLY_TARGET_BYTES_PER_POD: "0"
+  WRITE_ONLY_DIR_FANOUT: "1024"
+  # 0 means reuse CHUNK_SIZE_BYTES.
+  WRITE_ONLY_CHUNK_SIZE_BYTES: "0"
 ---
 apiVersion: v1
 kind: ConfigMap

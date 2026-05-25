@@ -899,3 +899,185 @@ def test_run_discover_with_split_filter(dataset_tree: Path, monkeypatch, capsys)
     # Only the four files under logs/* should be counted.
     assert payload["profile"]["file_count"] == 4
 
+
+# ---------------------------------------------------------------------------
+# write-only mode (Scenario G) — see docs/lustre-pressure-test.md § 15.
+# ---------------------------------------------------------------------------
+
+
+def _write_only_args(
+    *,
+    dataset_root: Path,
+    result_root: Path,
+    run_id: str = "fill-001",
+    pod_name: str = "lustre-fill-000",
+    file_size: int = 4096,
+    chunk_size: int = 1024,
+    target_bytes: int = 0,
+    files_per_pod: int = 0,
+    fanout: int = 4,
+    warmup_seconds: float = 0.0,
+    fail_on_write_error: bool = True,
+) -> object:
+    import argparse as _argparse
+
+    return _argparse.Namespace(
+        dataset_root=str(dataset_root),
+        result_root=str(result_root),
+        run_id=run_id,
+        pod_name=pod_name,
+        pod_index=0,
+        pod_count=1,
+        chunk_size=chunk_size,
+        write_only_file_size_bytes=file_size,
+        write_only_chunk_size_bytes=chunk_size,
+        write_only_target_bytes_per_pod=target_bytes,
+        write_only_dir_fanout=fanout,
+        files_per_pod=files_per_pod,
+        warmup_seconds=warmup_seconds,
+        fail_on_write_error=fail_on_write_error,
+        stats_interval_seconds=0,
+        max_recorded_errors=20,
+    )
+
+
+def test_write_only_synthesises_files_without_dataset_walk(tmp_path: Path, capsys):
+    dataset = tmp_path / "dataset"
+    dataset.mkdir()
+    # Place a sentinel file in the dataset; write-only must NOT touch it.
+    sentinel = dataset / "do_not_touch.txt"
+    sentinel.write_text("immutable")
+    result = tmp_path / "result"
+    result.mkdir()
+    args = _write_only_args(
+        dataset_root=dataset,
+        result_root=result,
+        file_size=2048,
+        chunk_size=512,
+        files_per_pod=3,
+        fanout=2,
+    )
+    summary = av.run_write_only(args)
+    assert summary.terminal_reason == "files_per_pod"
+    assert summary.files_written == 3
+    assert summary.bytes_written == 3 * 2048
+    assert summary.enospc_reached is False
+    # Dataset sentinel is untouched.
+    assert sentinel.read_text() == "immutable"
+    # Pod directory exists with files spread across the fanout.
+    pod_dir = result / "fill-001" / "lustre-fill-000"
+    written = sorted(p.relative_to(pod_dir) for p in pod_dir.rglob("file-*.bin"))
+    assert len(written) == 3
+    # Round-robin fanout: dir-0000 should hold indices 0 and 2.
+    assert (pod_dir / "dir-0000" / "file-00000000.bin").is_file()
+    assert (pod_dir / "dir-0001" / "file-00000001.bin").is_file()
+    capsys.readouterr()
+
+
+def test_write_only_enospc_is_terminal_success(tmp_path: Path, capsys):
+    import builtins
+    import errno as _errno
+
+    dataset = tmp_path / "dataset"
+    dataset.mkdir()
+    result = tmp_path / "result"
+    result.mkdir()
+
+    real_open = builtins.open
+    call_state = {"count": 0}
+
+    class _FailingHandle:
+        def __init__(self, real):
+            self._real = real
+            self._written_chunks = 0
+
+        def write(self, data):
+            self._written_chunks += 1
+            if self._written_chunks > 1:
+                raise OSError(_errno.ENOSPC, "No space left on device")
+            return self._real.write(data)
+
+        def __enter__(self):
+            self._real.__enter__()
+            return self
+
+        def __exit__(self, *exc):
+            return self._real.__exit__(*exc)
+
+        def close(self):
+            return self._real.close()
+
+    def _patched_open(path, mode="r", *args, **kwargs):
+        if "b" in mode and "w" in mode and "file-" in str(path):
+            call_state["count"] += 1
+            if call_state["count"] >= 2:
+                # Second file's first chunk write raises ENOSPC.
+                return _FailingHandle(real_open(path, mode, *args, **kwargs))
+        return real_open(path, mode, *args, **kwargs)
+
+    args = _write_only_args(
+        dataset_root=dataset,
+        result_root=result,
+        file_size=2048,
+        chunk_size=512,
+        fanout=2,
+    )
+    summary = av.run_write_only(args, open_func=_patched_open)
+    assert summary.terminal_reason == "enospc"
+    assert summary.enospc_reached is True
+    # First file completed; second file aborted mid-write.
+    assert summary.files_written == 1
+    assert summary.bytes_written >= 2048  # at least one full file
+    capsys.readouterr()
+
+
+def test_write_only_respects_target_bytes_per_pod(tmp_path: Path, capsys):
+    dataset = tmp_path / "dataset"
+    dataset.mkdir()
+    result = tmp_path / "result"
+    result.mkdir()
+    args = _write_only_args(
+        dataset_root=dataset,
+        result_root=result,
+        file_size=4096,
+        chunk_size=1024,
+        target_bytes=5000,  # less than 2 full files; should stop mid-second-file
+        fanout=2,
+    )
+    summary = av.run_write_only(args)
+    assert summary.terminal_reason == "target_bytes"
+    assert summary.bytes_written >= 5000
+    # Should have stopped without filling beyond ~1 chunk over the target.
+    assert summary.bytes_written < 5000 + 1024
+    capsys.readouterr()
+
+
+def test_write_only_path_gate_rejects_dataset_root_subpath(tmp_path: Path):
+    # If result-root is nested inside dataset-root, assert_disjoint_roots
+    # must abort before any write happens. This is the immutability guardrail.
+    dataset = tmp_path / "lustre"
+    dataset.mkdir()
+    bad_result = dataset / "results"
+    bad_result.mkdir()
+    args = _write_only_args(
+        dataset_root=dataset,
+        result_root=bad_result,
+        file_size=1024,
+        chunk_size=512,
+        files_per_pod=1,
+    )
+    with pytest.raises(ValueError, match="RESULT_ROOT.*nested inside.*DATASET_ROOT"):
+        av.run_write_only(args)
+
+
+def test_write_only_seed_is_deterministic_and_process_independent():
+    # Two calls with the same pod_name must produce the same seed.
+    seed_a = av._write_only_seed("lustre-fill-042")
+    seed_b = av._write_only_seed("lustre-fill-042")
+    assert seed_a == seed_b
+    # Different pod names give different seeds.
+    assert av._write_only_seed("lustre-fill-042") != av._write_only_seed("lustre-fill-043")
+    # And the seed is derived from SHA-256, not Python's salted hash().
+    expected = int.from_bytes(hashlib.sha256(b"lustre-fill-042").digest()[:8], "big")
+    assert seed_a == expected
+

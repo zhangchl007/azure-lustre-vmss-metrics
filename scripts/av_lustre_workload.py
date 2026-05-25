@@ -12,6 +12,10 @@ Modes:
   read-write-output  Read the pod's shard and write derived outputs into the
                      per-pod result directory.
   verify-output      Re-read derived outputs and validate their summaries.
+  write-only         Fill the per-pod result directory with synthetic payload
+                     until ENOSPC, a per-pod byte target, or a file-count cap.
+                     Treats ENOSPC as terminal-success (exit 0). Used by
+                     Scenario G (200-client fill-to-ENOSPC).
 
 Path safety:
   Output writes are constrained to ``<RESULT_ROOT>/<RUN_ID>/<pod-name>/``.
@@ -22,12 +26,15 @@ Path safety:
 from __future__ import annotations
 
 import argparse
+import contextlib
+import errno
 import hashlib
 import json
 import math
 import os
 import random
 import re
+import signal
 import socket
 import statistics
 import time
@@ -420,6 +427,7 @@ class WorkloadSummary:
     files_attempted: int = 0
     files_succeeded: int = 0
     files_failed: int = 0
+    files_written: int = 0
     bytes_read: int = 0
     bytes_written: int = 0
     planned_output_bytes: int = 0
@@ -432,6 +440,10 @@ class WorkloadSummary:
     per_bucket_bytes: dict[str, int] = field(default_factory=dict)
     slo: dict[str, object] = field(default_factory=dict)
     errors: list[dict[str, str]] = field(default_factory=list)
+    # write-only mode extras (§ 15.4 of docs/lustre-pressure-test.md).
+    enospc_reached: bool = False
+    terminal_reason: str | None = None
+    warmup_dropped_samples: int = 0
 
 
 def parse_slo_pairs(value: str | None) -> dict[str, float]:
@@ -1074,6 +1086,225 @@ def run_verify(args: argparse.Namespace) -> WorkloadSummary:
     return summary
 
 
+def _write_only_seed(pod_name: str) -> int:
+    """Return a deterministic 64-bit seed for a pod's payload generator.
+
+    Uses SHA-256 instead of the built-in ``hash()`` because the latter is
+    salted per Python interpreter since 3.3, so two runs of the same pod
+    name on different interpreters would produce different streams.
+    """
+    digest = hashlib.sha256(pod_name.encode("utf-8")).digest()
+    return int.from_bytes(digest[:8], "big")
+
+
+def run_write_only(
+    args: argparse.Namespace,
+    *,
+    open_func=None,
+    sleep_func=None,
+    monotonic_func=None,
+) -> WorkloadSummary:
+    """Fill the per-pod result directory with synthetic payload.
+
+    Terminal conditions (success-shaped, exit 0):
+      enospc        OSError(ENOSPC) on write — the filesystem is full.
+      target_bytes  ``WRITE_ONLY_TARGET_BYTES_PER_POD`` reached.
+      files_per_pod ``FILES_PER_POD`` reached.
+      sigterm       SIGTERM/SIGINT received — flush partial summary.
+      completed     Loop exited without any other terminal (defensive).
+
+    All non-ENOSPC ``OSError`` raises a write error and (when
+    ``FAIL_ON_WRITE_ERROR`` is true) terminates with exit 1 via the caller.
+
+    The injected ``open_func`` / ``sleep_func`` / ``monotonic_func`` hooks are
+    used by tests to simulate ENOSPC without filling a real filesystem.
+    """
+    _open = open_func or open
+    _sleep = sleep_func or time.sleep
+    _monotonic = monotonic_func or time.monotonic
+
+    dataset_root = Path(args.dataset_root)
+    result_root = Path(args.result_root)
+    assert_disjoint_roots(dataset_root, result_root)
+    run_id = validate_run_id_segment(args.run_id)
+    run_dir = (result_root / run_id).resolve()
+    try:
+        run_dir.relative_to(result_root.resolve())
+    except ValueError as exc:
+        raise ValueError("run-id must be a single path segment") from exc
+    pod_dir = (run_dir / args.pod_name).resolve()
+    try:
+        pod_dir.relative_to(run_dir)
+    except ValueError as exc:
+        raise ValueError("pod-name must be a single path segment") from exc
+    pod_dir.mkdir(parents=True, exist_ok=True)
+
+    file_size = max(int(args.write_only_file_size_bytes), 1)
+    chunk_size = max(int(args.write_only_chunk_size_bytes or args.chunk_size), 1)
+    if chunk_size > file_size:
+        chunk_size = file_size
+    fanout = max(int(args.write_only_dir_fanout), 1)
+    target_bytes = max(int(args.write_only_target_bytes_per_pod), 0)
+    files_per_pod = (
+        int(args.files_per_pod) if args.files_per_pod else 0
+    )
+    warmup_seconds = max(float(args.warmup_seconds), 0.0)
+
+    rng = random.Random(_write_only_seed(args.pod_name))
+    # Pre-build ONE chunk_size pseudorandom buffer per pod. For each chunk write
+    # we mutate only the first 8 bytes with a per-chunk counter so two chunks
+    # never repeat verbatim (defeats any defensive OST de-dup) while keeping
+    # CPU cost O(1) per chunk. Without this optimization the per-byte XOR loop
+    # is CPU-bound and per-pod throughput collapses under CFS-quota contention
+    # when many pods share a node (~30 pods × 1 CPU limit on 8 vCPU = 4x
+    # over-subscription on D8d_v5).
+    chunk_buf = bytearray(rng.randbytes(chunk_size))
+
+    summary = WorkloadSummary(
+        pod_name=args.pod_name,
+        pod_index=args.pod_index,
+        pod_count=args.pod_count,
+        mode="write-only",
+        dataset_root=str(dataset_root.resolve()),
+        result_root=str(pod_dir),
+        warmup_seconds=warmup_seconds,
+    )
+
+    sigterm_received = {"flag": False}
+
+    def _on_signal(signum, _frame):  # pragma: no cover - signal wiring
+        sigterm_received["flag"] = True
+
+    previous_handlers = {}
+    try:
+        previous_handlers[signal.SIGTERM] = signal.signal(signal.SIGTERM, _on_signal)
+        previous_handlers[signal.SIGINT] = signal.signal(signal.SIGINT, _on_signal)
+    except (ValueError, OSError):  # pragma: no cover - non-main thread
+        pass
+
+    latency_samples_ms: list[float] = []
+    throughput_samples_mib_s: list[float] = []
+    started = _monotonic()
+    last_progress = started
+
+    file_index = 0
+    chunk_counter = 0
+    try:
+        while True:
+            if sigterm_received["flag"]:
+                summary.terminal_reason = "sigterm"
+                break
+            if files_per_pod and summary.files_written >= files_per_pod:
+                summary.terminal_reason = "files_per_pod"
+                break
+            if target_bytes and summary.bytes_written >= target_bytes:
+                summary.terminal_reason = "target_bytes"
+                break
+
+            dir_idx = file_index % fanout
+            subdir = pod_dir / f"dir-{dir_idx:04d}"
+            file_path = subdir / f"file-{file_index:08d}.bin"
+            ensure_within(pod_dir, file_path)
+            try:
+                subdir.mkdir(parents=True, exist_ok=True)
+            except OSError as exc:
+                if exc.errno == errno.ENOSPC:
+                    summary.enospc_reached = True
+                    summary.terminal_reason = "enospc"
+                    break
+                raise
+
+            file_started = _monotonic()
+            bytes_this_file = 0
+            try:
+                with _open(file_path, "wb") as fh:
+                    remaining = file_size
+                    while remaining > 0:
+                        if sigterm_received["flag"]:
+                            break
+                        write_size = min(chunk_size, remaining)
+                        # O(1) per-chunk mutation: stamp the chunk counter into
+                        # the first 8 bytes of the pre-built buffer. No per-byte
+                        # Python loop, so this stays CPU-cheap even at 4 MiB
+                        # chunks under heavy node oversubscription.
+                        counter_bytes = chunk_counter.to_bytes(8, "little", signed=False)
+                        chunk_buf[:8] = counter_bytes
+                        if write_size == chunk_size:
+                            fh.write(chunk_buf)
+                        else:
+                            fh.write(memoryview(chunk_buf)[:write_size])
+                        bytes_this_file += write_size
+                        summary.bytes_written += write_size
+                        chunk_counter += 1
+                        remaining -= write_size
+                        if target_bytes and summary.bytes_written >= target_bytes:
+                            break
+            except OSError as exc:
+                if exc.errno == errno.ENOSPC:
+                    summary.enospc_reached = True
+                    summary.terminal_reason = "enospc"
+                    summary.bytes_written += bytes_this_file - (
+                        bytes_this_file  # bytes_written already counts what was written
+                    )
+                    break
+                summary.files_failed += 1
+                if len(summary.errors) < args.max_recorded_errors:
+                    summary.errors.append({"path": str(file_path), "error": str(exc)})
+                if args.fail_on_write_error:
+                    raise
+                continue
+
+            elapsed_file = _monotonic() - file_started
+            elapsed_total = _monotonic() - started
+            if elapsed_total >= warmup_seconds:
+                latency_samples_ms.append(elapsed_file * 1000.0)
+                if elapsed_file > 0:
+                    throughput_samples_mib_s.append(
+                        bytes_this_file / (1024 * 1024) / elapsed_file
+                    )
+            else:
+                summary.warmup_dropped_samples += 1
+
+            summary.files_written += 1
+            summary.files_attempted += 1
+            summary.files_succeeded += 1
+            file_index += 1
+
+            if (
+                args.stats_interval_seconds
+                and (_monotonic() - last_progress) >= args.stats_interval_seconds
+            ):
+                summary.elapsed_seconds = _monotonic() - started
+                _print_progress(summary, summary.elapsed_seconds)
+                last_progress = _monotonic()
+    finally:
+        for sig, handler in previous_handlers.items():
+            with contextlib.suppress(ValueError, OSError):  # pragma: no cover
+                signal.signal(sig, handler)
+
+    if summary.terminal_reason is None:
+        summary.terminal_reason = "completed"
+    summary.elapsed_seconds = _monotonic() - started
+    if latency_samples_ms:
+        summary.write_latency_ms = {
+            "p50": round(percentile(latency_samples_ms, 50), 3),
+            "p95": round(percentile(latency_samples_ms, 95), 3),
+            "p99": round(percentile(latency_samples_ms, 99), 3),
+            "count": len(latency_samples_ms),
+        }
+    if throughput_samples_mib_s:
+        summary.warmup_latency_ms = {
+            "steady_state_throughput_mib_s_p50": round(
+                percentile(throughput_samples_mib_s, 50), 3
+            ),
+            "steady_state_throughput_mib_s_p95": round(
+                percentile(throughput_samples_mib_s, 95), 3
+            ),
+        }
+    _print_summary(summary)
+    return summary
+
+
 def _print_progress(summary: WorkloadSummary, elapsed: float) -> None:
     payload = {
         "event": "progress",
@@ -1107,6 +1338,7 @@ def _print_summary(summary: WorkloadSummary) -> None:
         "files_attempted": summary.files_attempted,
         "files_succeeded": summary.files_succeeded,
         "files_failed": summary.files_failed,
+        "files_written": summary.files_written,
         "bytes_read": summary.bytes_read,
         "bytes_written": summary.bytes_written,
         "planned_output_bytes": summary.planned_output_bytes,
@@ -1127,6 +1359,9 @@ def _print_summary(summary: WorkloadSummary) -> None:
         "hotset_latency_ms": summary.hotset_latency_ms,
         "slo": summary.slo,
         "errors": summary.errors,
+        "enospc_reached": summary.enospc_reached,
+        "terminal_reason": summary.terminal_reason,
+        "warmup_dropped_samples": summary.warmup_dropped_samples,
     }
     print(json.dumps(payload, indent=2, sort_keys=True), flush=True)
 
@@ -1155,7 +1390,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--mode",
-        choices=("discover", "read-only", "read-write-output", "verify-output"),
+        choices=("discover", "read-only", "read-write-output", "verify-output", "write-only"),
         default=_env_default("MODE", "discover"),
         help="Workload mode. Defaults to env MODE or 'discover'.",
     )
@@ -1349,6 +1584,30 @@ def build_parser() -> argparse.ArgumentParser:
         default=_env_flag("FAIL_ON_SLO", default=False),
         help="Exit non-zero when any per-bucket p95 exceeds its threshold.",
     )
+    parser.add_argument(
+        "--write-only-file-size-bytes",
+        type=parse_size,
+        default=parse_size(_env_default("WRITE_ONLY_FILE_SIZE_BYTES", "64MiB")),
+        help="Per-file size for write-only mode (Scenario G).",
+    )
+    parser.add_argument(
+        "--write-only-target-bytes-per-pod",
+        type=parse_size,
+        default=parse_size(_env_default("WRITE_ONLY_TARGET_BYTES_PER_POD", "0")),
+        help="Stop write-only mode after this many bytes. 0 = unbounded.",
+    )
+    parser.add_argument(
+        "--write-only-dir-fanout",
+        type=int,
+        default=int(_env_default("WRITE_ONLY_DIR_FANOUT", "1024") or "1024"),
+        help="Subdirectory fanout for write-only mode; round-robin to spread MDT load.",
+    )
+    parser.add_argument(
+        "--write-only-chunk-size-bytes",
+        type=parse_size,
+        default=parse_size(_env_default("WRITE_ONLY_CHUNK_SIZE_BYTES", "0")),
+        help="Write buffer size for write-only mode. 0 means reuse CHUNK_SIZE_BYTES.",
+    )
     return parser
 
 
@@ -1387,6 +1646,13 @@ def main(argv: list[str] | None = None) -> int:
     if args.mode == "verify-output":
         summary = run_verify(args)
         return 1 if summary.files_failed else 0
+    if args.mode == "write-only":
+        summary = run_write_only(args)
+        # ENOSPC, target_bytes, files_per_pod, sigterm, completed are all
+        # success terminals. Only an unexpected exception (re-raised by
+        # FAIL_ON_WRITE_ERROR) or a path-gate escape (raises ValueError
+        # before we get here) is failure.
+        return 0
     raise SystemExit(f"unknown mode: {args.mode}")
 
 
