@@ -349,6 +349,16 @@ class VmssMetricsExporter:
             LUSTRE_MDT_LABELS,
             registry=effective_registry,
         )
+        self.lustre_mdt_client_evictions = Gauge(
+            "azure_managed_lustre_mdt_client_evictions",
+            (
+                "Azure Managed Lustre client evictions from Azure Monitor "
+                "LustreClientEvictions. This is the latest Azure Monitor interval-total "
+                "sample for the MDT, or mdtnum=all when Azure returns an aggregate series."
+            ),
+            LUSTRE_MDT_LABELS,
+            registry=effective_registry,
+        )
         self.lustre_mdt_connected_clients = Gauge(
             "azure_managed_lustre_mdt_connected_clients",
             (
@@ -403,6 +413,17 @@ class VmssMetricsExporter:
             (
                 "Derived Azure Managed Lustre connected client count per filesystem. "
                 "Computed as the maximum MDTConnectedClients value for the filesystem."
+            ),
+            LUSTRE_FILESYSTEM_CAPACITY_LABELS,
+            registry=effective_registry,
+        )
+        self.lustre_filesystem_client_evictions = Gauge(
+            "azure_managed_lustre_filesystem_client_evictions",
+            (
+                "Derived Azure Managed Lustre client evictions per filesystem from "
+                "LustreClientEvictions. This is the latest Azure Monitor interval-total "
+                "sample summed across MDTs, or the aggregate mdtnum=all value when Azure "
+                "returns a filesystem-level series."
             ),
             LUSTRE_FILESYSTEM_CAPACITY_LABELS,
             registry=effective_registry,
@@ -646,6 +667,7 @@ class VmssMetricsExporter:
                 self.lustre_mdt_sample_timestamp,
                 self.lustre_hsm_action_errors,
                 self.lustre_hsm_current_requests,
+                self.lustre_mdt_client_evictions,
                 self.lustre_mdt_connected_clients,
                 self.lustre_mdt_client_latency,
                 self.lustre_mdt_client_ops,
@@ -653,6 +675,7 @@ class VmssMetricsExporter:
                 self.lustre_filesystem_info,
                 self.lustre_filesystem_storage_capacity_tib,
                 self.lustre_filesystem_connected_clients,
+                self.lustre_filesystem_client_evictions,
                 self.lustre_metadata_amplification_ratio,
                 self.lustre_filesystem_sample_max_age,
             ):
@@ -816,6 +839,7 @@ class VmssMetricsExporter:
                 ):
                     for gauge in (
                         self.lustre_filesystem_connected_clients,
+                        self.lustre_filesystem_client_evictions,
                         self.lustre_metadata_amplification_ratio,
                         self.lustre_filesystem_sample_max_age,
                     ):
@@ -860,6 +884,7 @@ class VmssMetricsExporter:
                         self.lustre_mdt_sample_timestamp,
                         self.lustre_hsm_action_errors,
                         self.lustre_hsm_current_requests,
+                        self.lustre_mdt_client_evictions,
                         self.lustre_mdt_connected_clients,
                     ):
                         with suppress(KeyError):
@@ -887,6 +912,11 @@ class VmssMetricsExporter:
                     self.lustre_filesystem_connected_clients,
                     metric.label_values,
                     metric.connected_clients,
+                )
+                self._set_or_remove_lustre_gauge(
+                    self.lustre_filesystem_client_evictions,
+                    metric.label_values,
+                    metric.client_evictions,
                 )
                 self._set_or_remove_lustre_gauge(
                     self.lustre_metadata_amplification_ratio,
@@ -1037,6 +1067,11 @@ class VmssMetricsExporter:
                     self.lustre_hsm_current_requests,
                     metric.label_values,
                     metric.hsm_current_requests,
+                )
+                self._set_or_remove_lustre_gauge(
+                    self.lustre_mdt_client_evictions,
+                    metric.label_values,
+                    metric.client_evictions,
                 )
                 self._set_or_remove_lustre_gauge(
                     self.lustre_mdt_connected_clients,

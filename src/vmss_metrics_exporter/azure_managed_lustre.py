@@ -66,6 +66,7 @@ MDT_CLIENT_LATENCY_METRIC = "MDTClientLatency"
 MDT_CLIENT_OPS_METRIC = "MDTClientOps"
 HSM_ACTION_ERRORS_METRIC = "HSMActionErrors"
 HSM_CURRENT_REQUESTS_METRIC = "HSMCurrentRequests"
+LUSTRE_CLIENT_EVICTIONS_METRIC = "LustreClientEvictions"
 OST_CAPACITY_METRICS = (
     OST_BYTES_AVAILABLE_METRIC,
     OST_BYTES_USED_METRIC,
@@ -101,8 +102,11 @@ MDT_OPERATION_METRICS = (
     MDT_CLIENT_LATENCY_METRIC,
     MDT_CLIENT_OPS_METRIC,
 )
-MDT_METRICS = MDT_SIMPLE_METRICS + MDT_OPERATION_METRICS
-LUSTRE_METRICS = OST_METRICS + MDT_METRICS
+MDT_TOTAL_METRICS = (LUSTRE_CLIENT_EVICTIONS_METRIC,)
+MDT_METRICS = MDT_SIMPLE_METRICS + MDT_OPERATION_METRICS + MDT_TOTAL_METRICS
+LUSTRE_AVERAGE_METRICS = OST_METRICS + MDT_SIMPLE_METRICS + MDT_OPERATION_METRICS
+LUSTRE_TOTAL_METRICS = MDT_TOTAL_METRICS
+LUSTRE_METRICS = LUSTRE_AVERAGE_METRICS + LUSTRE_TOTAL_METRICS
 
 _ISO_DURATION_PATTERN = re.compile(r"^PT(?:(?P<hours>\d+)H)?(?:(?P<minutes>\d+)M)?$", re.IGNORECASE)
 
@@ -294,7 +298,7 @@ class AzureManagedLustreCollector:
         self._apply_request_jitter()
         merged_metrics: list[Any] = []
         for batch in _chunk_metric_names(
-            LUSTRE_METRICS, AZURE_MONITOR_METRIC_NAMES_PER_REQUEST
+            LUSTRE_AVERAGE_METRICS, AZURE_MONITOR_METRIC_NAMES_PER_REQUEST
         ):
             response = self._execute_with_retry(
                 lambda batch=batch: self._metrics_client.query_resource(
@@ -304,6 +308,20 @@ class AzureManagedLustreCollector:
                     timespan=self._lookback,
                     granularity=self._granularity,
                     aggregations=["Average"],
+                )
+            )
+            merged_metrics.extend(_iter_sequence_attr(response, "metrics"))
+        for batch in _chunk_metric_names(
+            LUSTRE_TOTAL_METRICS, AZURE_MONITOR_METRIC_NAMES_PER_REQUEST
+        ):
+            response = self._execute_with_retry(
+                lambda batch=batch: self._metrics_client.query_resource(
+                    filesystem.resource_id,
+                    list(batch),
+                    metric_namespace=LUSTRE_METRIC_NAMESPACE,
+                    timespan=self._lookback,
+                    granularity=self._granularity,
+                    aggregations=["Total"],
                 )
             )
             merged_metrics.extend(_iter_sequence_attr(response, "metrics"))
@@ -435,7 +453,7 @@ def normalize_lustre_metrics_response(
         if metric_name not in LUSTRE_METRICS:
             continue
         for time_series in _iter_sequence_attr(metric, "timeseries", fallback="time_series"):
-            latest = _latest_average(time_series)
+            latest = _latest_metric_value(metric_name, time_series)
             if latest is None:
                 continue
             value, sample_timestamp_seconds = latest
@@ -477,7 +495,7 @@ def normalize_lustre_metrics_response(
                         sample_timestamp_seconds,
                         mdt_operation_timestamps.get(key, 0),
                     )
-            elif metric_name in MDT_SIMPLE_METRICS:
+            elif metric_name in MDT_SIMPLE_METRICS or metric_name in MDT_TOTAL_METRICS:
                 mdt_values.setdefault(mdtnum, {})[metric_name] = value
                 if sample_timestamp_seconds is not None:
                     mdt_timestamps[mdtnum] = max(
@@ -543,6 +561,7 @@ def normalize_lustre_metrics_response(
                 files_total=values.get(MDT_FILES_TOTAL_METRIC),
                 hsm_action_errors=values.get(HSM_ACTION_ERRORS_METRIC),
                 hsm_current_requests=values.get(HSM_CURRENT_REQUESTS_METRIC),
+                client_evictions=values.get(LUSTRE_CLIENT_EVICTIONS_METRIC),
                 connected_clients=values.get(MDT_CONNECTED_CLIENTS_METRIC),
                 sample_timestamp_seconds=mdt_timestamps.get(mdtnum),
             )
@@ -639,7 +658,7 @@ def summarize_lustre_metrics(result: ManagedLustreCollectionResult) -> str:
             "bytes_available\tbytes_used\tbytes_total\tbytes_available_percent\t"
             "connected_clients\t"
             "files_free\tfiles_used\tfiles_total\tfiles_free_percent\t"
-            "hsm_action_errors\thsm_current_requests"
+            "hsm_action_errors\thsm_current_requests\tclient_evictions"
         )
         for item in result.mdt_metrics:
             lines.append(
@@ -661,6 +680,7 @@ def summarize_lustre_metrics(result: ManagedLustreCollectionResult) -> str:
                         _optional_float_str(item.files_free_percent),
                         _optional_float_str(item.hsm_action_errors),
                         _optional_float_str(item.hsm_current_requests),
+                        _optional_float_str(item.client_evictions),
                     ]
                 )
             )
@@ -811,10 +831,24 @@ def _dimension_value_or_aggregate(time_series: object, dimension_name: str) -> s
 
 
 def _latest_average(time_series: object) -> tuple[float, float | None] | None:
+    return _latest_value(time_series, "average")
+
+
+def _latest_metric_value(
+    metric_name: str,
+    time_series: object,
+) -> tuple[float, float | None] | None:
+    if metric_name == LUSTRE_CLIENT_EVICTIONS_METRIC:
+        return _latest_value(time_series, "total", "maximum", "average")
+    return _latest_value(time_series, "average")
+
+
+def _latest_value(time_series: object, *fields: str) -> tuple[float, float | None] | None:
     for point in reversed(_iter_sequence_attr(time_series, "data")):
-        average = _attr_or_mapping(point, "average")
-        if average is not None:
-            return float(average), _timestamp_seconds(point)
+        for field in fields:
+            value = _attr_or_mapping(point, field)
+            if value is not None:
+                return float(value), _timestamp_seconds(point)
     return None
 
 

@@ -176,6 +176,7 @@ class ManagedLustreMdtMetric:
     files_total: float | None = None
     hsm_action_errors: float | None = None
     hsm_current_requests: float | None = None
+    client_evictions: float | None = None
     connected_clients: float | None = None
     sample_timestamp_seconds: float | None = None
 
@@ -261,6 +262,7 @@ class ManagedLustreFilesystemAggregateMetric:
     filesystem_name: str
     location: str
     connected_clients: float | None = None
+    client_evictions: float | None = None
     metadata_amplification_ratio: float | None = None
     sample_max_age_seconds: float | None = None
 
@@ -326,6 +328,9 @@ def build_lustre_filesystem_aggregate_metrics(
         connected_clients = _max_optional(
             metric.connected_clients for metric in filesystem_mdt_metrics
         )
+        client_evictions = _sum_optional(
+            metric.client_evictions for metric in filesystem_mdt_metrics
+        )
         metadata_ops = sum(
             metric.client_ops or 0.0 for metric in filesystem_mdt_operation_metrics
         )
@@ -360,6 +365,7 @@ def build_lustre_filesystem_aggregate_metrics(
                 filesystem_name=key[2],
                 location=key[3],
                 connected_clients=connected_clients,
+                client_evictions=client_evictions,
                 metadata_amplification_ratio=metadata_amplification_ratio,
                 sample_max_age_seconds=sample_max_age_seconds,
             )
@@ -386,6 +392,13 @@ def _max_optional(values: Iterable[float | None]) -> float | None:
     if not numeric_values:
         return None
     return max(numeric_values)
+
+
+def _sum_optional(values: Iterable[float | None]) -> float | None:
+    numeric_values = [value for value in values if value is not None]
+    if not numeric_values:
+        return None
+    return sum(numeric_values)
 
 
 @dataclass(frozen=True, slots=True)

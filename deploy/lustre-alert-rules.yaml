@@ -102,6 +102,32 @@ groups:
           summary: "Azure Managed Lustre HSM backlog critical"
           description: "{{ $labels.filesystem_name }} MDT {{ $labels.mdtnum }} in {{ $labels.resource_group }} has more than 500 HSM in-flight requests for 10 minutes. Tune the threshold for your HSM workload. Current value: {{ printf \"%.2f\" $value }}."
 
+      - alert: AzureManagedLustreClientEvictions
+        expr: |
+          sum by (subscription_id, resource_group, filesystem_name, location) (
+            max_over_time(azure_managed_lustre_filesystem_client_evictions[10m])
+          ) > 0
+        for: 2m
+        labels:
+          severity: warning
+          service: azure-managed-lustre
+        annotations:
+          summary: "Azure Managed Lustre client evictions detected"
+          description: "{{ $labels.filesystem_name }} in {{ $labels.resource_group }} reported client evictions in the last 10 minutes. Current maximum interval-total sample: {{ printf \"%.0f\" $value }}. Check client/network health and correlate with MDT latency."
+
+      - alert: AzureManagedLustreClientEvictionBurst
+        expr: |
+          sum by (subscription_id, resource_group, filesystem_name, location) (
+            sum_over_time(azure_managed_lustre_filesystem_client_evictions[30m])
+          ) > 100
+        for: 2m
+        labels:
+          severity: critical
+          service: azure-managed-lustre
+        annotations:
+          summary: "Azure Managed Lustre client eviction burst"
+          description: "{{ $labels.filesystem_name }} in {{ $labels.resource_group }} reported more than 100 client evictions over 30 minutes. Current summed interval-total samples: {{ printf \"%.0f\" $value }}. Expect client reconnects and possible workload disruption."
+
       # ---- OST safety boundary (used %) — doc § 9.1 ------------------
       - alert: AzureManagedLustreOstUsedPercentWarn
         expr: azure_managed_lustre_ost_bytes_used_percent > 75

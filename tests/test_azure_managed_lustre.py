@@ -9,7 +9,9 @@ import pytest
 from vmss_metrics_exporter.azure_managed_lustre import (
     AMLFS_FILESYSTEMS_QUERY,
     AZURE_MONITOR_METRIC_NAMES_PER_REQUEST,
+    LUSTRE_AVERAGE_METRICS,
     LUSTRE_METRICS,
+    LUSTRE_TOTAL_METRICS,
     AzureManagedLustreCollector,
     _chunk_metric_names,
     create_metrics_query_client,
@@ -380,6 +382,17 @@ class FakeMetricsClient:
                         },
                     ],
                 },
+                {
+                    "name": "LustreClientEvictions",
+                    "timeseries": [
+                        {
+                            "metadata_values": [
+                                {"name": {"value": "mdtnum"}, "value": "0"},
+                            ],
+                            "data": [{"total": 6.0}],
+                        },
+                    ],
+                },
             ]
         }
 
@@ -683,6 +696,7 @@ def test_normalize_lustre_metrics_response_groups_ost_client_and_mdt_metrics() -
     assert mdt_metrics[0].files_total == 100.0
     assert mdt_metrics[0].hsm_action_errors == 2.0
     assert mdt_metrics[0].hsm_current_requests == 17.0
+    assert mdt_metrics[0].client_evictions == 6.0
     assert len(mdt_operations) == 1
     assert mdt_operations[0].operation == "open"
     assert mdt_operations[0].client_latency_milliseconds == 1.5
@@ -718,6 +732,7 @@ def test_build_lustre_filesystem_aggregate_metrics() -> None:
                 "westus3",
                 "0",
                 connected_clients=7.0,
+                client_evictions=2.0,
                 sample_timestamp_seconds=950.0,
             ),
             ManagedLustreMdtMetric(
@@ -727,6 +742,7 @@ def test_build_lustre_filesystem_aggregate_metrics() -> None:
                 "westus3",
                 "1",
                 connected_clients=13.0,
+                client_evictions=3.0,
             ),
         ),
         mdt_operation_metrics=(
@@ -747,6 +763,7 @@ def test_build_lustre_filesystem_aggregate_metrics() -> None:
     aggregate = aggregate_metrics[0]
     assert aggregate.label_values == ("sub-a", "rg-a", "lustre-a", "westus3")
     assert aggregate.connected_clients == 13.0
+    assert aggregate.client_evictions == 5.0
     assert aggregate.metadata_amplification_ratio == 21.0 / 700.0
     assert aggregate.sample_max_age_seconds == 100.0
 
@@ -804,6 +821,7 @@ def test_normalize_lustre_metrics_response_accepts_dimensionless_aggregate_serie
                 {"name": "MDTClientOps", "timeseries": [{"data": [{"average": 84.0}]}]},
                 {"name": "HSMActionErrors", "timeseries": [{"data": [{"average": 3.0}]}]},
                 {"name": "HSMCurrentRequests", "timeseries": [{"data": [{"average": 5.0}]}]},
+                {"name": "LustreClientEvictions", "timeseries": [{"data": [{"total": 11.0}]}]},
             ]
         },
     )
@@ -817,6 +835,7 @@ def test_normalize_lustre_metrics_response_accepts_dimensionless_aggregate_serie
     assert mdt_metrics[0].bytes_available == 456.0
     assert mdt_metrics[0].hsm_action_errors == 3.0
     assert mdt_metrics[0].hsm_current_requests == 5.0
+    assert mdt_metrics[0].client_evictions == 11.0
     assert mdt_operations[0].mdtnum == "all"
     assert mdt_operations[0].operation == "all"
     assert mdt_operations[0].client_ops == 84.0
@@ -862,19 +881,27 @@ def test_collector_discovers_and_collects_metrics(monkeypatch: pytest.MonkeyPatc
     assert result.mdt_metrics[0].files_total == 100.0
     assert result.mdt_metrics[0].hsm_action_errors == 2.0
     assert result.mdt_metrics[0].hsm_current_requests == 17.0
+    assert result.mdt_metrics[0].client_evictions == 6.0
     assert result.mdt_metrics[0].connected_clients == 7.0
     assert len(result.mdt_operation_metrics) == 1
     assert result.mdt_operation_metrics[0].operation == "open"
     assert result.mdt_operation_metrics[0].client_ops == 9.0
     assert len(result.filesystem_aggregate_metrics) == 1
     assert result.filesystem_aggregate_metrics[0].connected_clients == 7.0
+    assert result.filesystem_aggregate_metrics[0].client_evictions == 6.0
     assert result.filesystem_aggregate_metrics[0].metadata_amplification_ratio == 9.0 / 700.0
     expected_batches = [
         list(batch)
         for batch in _chunk_metric_names(
-            LUSTRE_METRICS, AZURE_MONITOR_METRIC_NAMES_PER_REQUEST
+            LUSTRE_AVERAGE_METRICS, AZURE_MONITOR_METRIC_NAMES_PER_REQUEST
         )
     ]
+    expected_batches.extend(
+        list(batch)
+        for batch in _chunk_metric_names(
+            LUSTRE_TOTAL_METRICS, AZURE_MONITOR_METRIC_NAMES_PER_REQUEST
+        )
+    )
     assert metrics_client.metric_names == expected_batches
 
 
@@ -1087,6 +1114,7 @@ def test_summarize_lustre_metrics_includes_mdt_metrics() -> None:
                     files_total=100.0,
                     hsm_action_errors=3.0,
                     hsm_current_requests=5.0,
+                    client_evictions=8.0,
                 ),
             ),
             mdt_operation_metrics=(
@@ -1109,6 +1137,8 @@ def test_summarize_lustre_metrics_includes_mdt_metrics() -> None:
     assert "open" in summary
     assert "hsm_action_errors" in summary
     assert "hsm_current_requests" in summary
+    assert "client_evictions" in summary
+    assert "8.0" in summary
     assert "# no Lustre metric samples returned" not in summary
 
 

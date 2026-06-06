@@ -100,6 +100,7 @@ def test_collect_once_sets_lustre_metrics_and_removes_stale_series() -> None:
                 files_total=100.0,
                 hsm_action_errors=2.0,
                 hsm_current_requests=17.0,
+                client_evictions=6.0,
                 connected_clients=13.0,
             ),
             ManagedLustreMdtMetric(
@@ -109,6 +110,7 @@ def test_collect_once_sets_lustre_metrics_and_removes_stale_series() -> None:
                 bytes_total=1000.0,
                 hsm_action_errors=7.0,
                 hsm_current_requests=4.0,
+                client_evictions=2.0,
             ),
         ),
         mdt_operation_metrics=(
@@ -157,6 +159,7 @@ def test_collect_once_sets_lustre_metrics_and_removes_stale_series() -> None:
                 files_total=100.0,
                 hsm_action_errors=1.0,
                 hsm_current_requests=12.0,
+                client_evictions=4.0,
                 connected_clients=14.0,
                 sample_timestamp_seconds=170020.0,
             ),
@@ -176,6 +179,7 @@ def test_collect_once_sets_lustre_metrics_and_removes_stale_series() -> None:
                 "lustre-a",
                 "westus3",
                 connected_clients=14.0,
+                client_evictions=4.0,
                 metadata_amplification_ratio=10.0 / 720.0,
                 sample_max_age_seconds=45.0,
             ),
@@ -244,6 +248,7 @@ def test_collect_once_sets_lustre_metrics_and_removes_stale_series() -> None:
     assert f"azure_managed_lustre_mdt_files_used_percent{{{mdt_labels}}} 15.0" in metrics
     assert f"azure_managed_lustre_hsm_action_errors{{{mdt_labels}}} 1.0" in metrics
     assert f"azure_managed_lustre_hsm_current_requests{{{mdt_labels}}} 12.0" in metrics
+    assert f"azure_managed_lustre_mdt_client_evictions{{{mdt_labels}}} 4.0" in metrics
     mdt_operation_labels = (
         'filesystem_name="lustre-a",location="westus3",mdtnum="0",operation="open",'
         'resource_group="rg-a",subscription_id="sub-a"'
@@ -260,6 +265,10 @@ def test_collect_once_sets_lustre_metrics_and_removes_stale_series() -> None:
     assert (
         f"azure_managed_lustre_filesystem_connected_clients"
         f"{{{filesystem_labels}}} 14.0" in metrics
+    )
+    assert (
+        f"azure_managed_lustre_filesystem_client_evictions"
+        f"{{{filesystem_labels}}} 4.0" in metrics
     )
     assert (
         f"azure_managed_lustre_metadata_amplification_ratio"
@@ -568,6 +577,7 @@ def test_set_leader_clears_resource_gauges_on_demotion() -> None:
                 bytes_available=700.0,
                 hsm_action_errors=3.0,
                 hsm_current_requests=11.0,
+                client_evictions=5.0,
             ),
         ),
     )
@@ -586,6 +596,7 @@ def test_set_leader_clears_resource_gauges_on_demotion() -> None:
     assert "azure_managed_lustre_filesystem_info" in populated
     assert "azure_managed_lustre_hsm_action_errors{" in populated
     assert "azure_managed_lustre_hsm_current_requests{" in populated
+    assert "azure_managed_lustre_mdt_client_evictions{" in populated
     assert "azure_vmss_exporter_is_leader 1.0" in populated
 
     exporter.set_leader(False)
@@ -595,6 +606,7 @@ def test_set_leader_clears_resource_gauges_on_demotion() -> None:
     assert "azure_managed_lustre_filesystem_info{" not in cleared
     assert "azure_managed_lustre_hsm_action_errors{" not in cleared
     assert "azure_managed_lustre_hsm_current_requests{" not in cleared
+    assert "azure_managed_lustre_mdt_client_evictions{" not in cleared
     assert "azure_vmss_exporter_is_leader 0.0" in cleared
     assert "azure_vmss_exporter_vmss_total 0.0" in cleared
     assert "azure_managed_lustre_filesystem_total 0.0" in cleared

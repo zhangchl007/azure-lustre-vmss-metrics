@@ -11,6 +11,7 @@ KUBE_NAMESPACE ?= default
 KUBE_MANIFEST ?= deploy/kubernetes.yaml
 PYTHON ?= python
 DOCKER ?= docker
+DOCKER_BUILD_ARGS ?=
 KUBECTL ?= kubectl
 
 .PHONY: help
@@ -42,11 +43,11 @@ run: ## Run the exporter locally from Python.
 
 .PHONY: image
 image: check-docker ## Build the container image.
-	$(DOCKER) build -t $(IMAGE_REF) .
+	$(DOCKER) build $(DOCKER_BUILD_ARGS) -t $(IMAGE_REF) .
 
 .PHONY: image-no-cache
 image-no-cache: check-docker ## Build the container image without Docker cache.
-	$(DOCKER) build --no-cache -t $(IMAGE_REF) .
+	$(DOCKER) build --no-cache $(DOCKER_BUILD_ARGS) -t $(IMAGE_REF) .
 
 .PHONY: push
 push: check-docker ## Push the container image.
