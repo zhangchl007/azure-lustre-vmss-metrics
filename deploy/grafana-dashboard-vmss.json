@@ -556,13 +556,13 @@
       "title": "Current instance count by VMSS",
       "description": "Most recent observed VM instance count, sorted descending. Labels include resource group so VMSS with identical names across clusters are not collapsed.",
       "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-      "gridPos": {"h": 12, "w": 12, "x": 0, "y": 44},
+      "gridPos": {"h": 12, "w": 8, "x": 0, "y": 44},
       "targets": [
         {
-          "expr": "max by (subscription_id, resource_group, vmss_name, location, orchestration_mode) (\n  azure_vmss_instance_count{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", vmss_name=~\"$vmss_name\", location=~\"$location\"}\n)",
+          "expr": "sort_desc(\n  max by (subscription_id, resource_group, vmss_name, location, orchestration_mode) (\n    azure_vmss_instance_count{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", vmss_name=~\"$vmss_name\", location=~\"$location\"}\n  )\n)",
           "legendFormat": "{{vmss_name}} · {{resource_group}}",
           "refId": "A",
-          "instant": false
+          "instant": true
         }
       ],
       "fieldConfig": {
@@ -592,12 +592,45 @@
       "pluginVersion": "10.4.0"
     },
     {
+      "type": "bargauge",
+      "id": 205,
+      "title": "Top 5 VM sizes by instances",
+      "description": "Top VM sizes ranked by current observed VMSS instance count. This highlights the SKU families consuming the most VMSS instances in the selected scope.",
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "gridPos": {"h": 12, "w": 6, "x": 8, "y": 44},
+      "targets": [
+        {
+          "expr": "topk(5,\n  sum by (vm_size) (\n    max by (subscription_id, resource_group, vmss_name, location, orchestration_mode) (\n      azure_vmss_instance_count{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", vmss_name=~\"$vmss_name\", location=~\"$location\"}\n    )\n    * on (subscription_id, resource_group, vmss_name, location, orchestration_mode) group_left(vm_size)\n    max by (subscription_id, resource_group, vmss_name, location, orchestration_mode, vm_size) (\n      azure_vmss_info{job=\"$job\"}\n    )\n  )\n)",
+          "legendFormat": "{{vm_size}}",
+          "refId": "A",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "unit": "short",
+          "decimals": 0,
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "valueMode": "color",
+        "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}
+      },
+      "pluginVersion": "10.4.0"
+    },
+    {
       "type": "table",
       "id": 11,
       "title": "VMSS inventory (latest)",
-      "description": "Current VMSS view with VM size, desired capacity, actual instances, and drift.",
+      "description": "Current VMSS view with VM size, desired capacity, actual instances, and drift. Sorted by current instance count descending so the largest VMSS appear first.",
       "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-      "gridPos": {"h": 12, "w": 12, "x": 12, "y": 44},
+      "gridPos": {"h": 12, "w": 10, "x": 14, "y": 44},
       "targets": [
         {
           "expr": "max by (subscription_id, resource_group, vmss_name, location, orchestration_mode) (\n  azure_vmss_instance_count{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", vmss_name=~\"$vmss_name\", location=~\"$location\"}\n)\n* on (subscription_id, resource_group, vmss_name, location, orchestration_mode) group_left(vm_size)\nmax by (subscription_id, resource_group, vmss_name, location, orchestration_mode, vm_size) (\n  azure_vmss_info{job=\"$job\"}\n)",
@@ -719,7 +752,7 @@
       "options": {
         "showHeader": true,
         "cellHeight": "sm",
-        "sortBy": [{"displayName": "drift", "desc": true}, {"displayName": "instances", "desc": true}]
+        "sortBy": [{"displayName": "instances", "desc": true}, {"displayName": "drift", "desc": true}]
       },
       "pluginVersion": "10.4.0"
     },
