@@ -1,18 +1,35 @@
 # Azure VMSS and Managed Lustre Metrics Exporter
 
-Prometheus exporter for Azure VM Scale Sets and Azure Managed Lustre filesystems.
+Production-oriented Prometheus exporter for Azure VM Scale Sets, standalone Azure
+VM inventory, and Azure Managed Lustre filesystems.
 
-The exporter discovers resources with Azure Resource Graph, reads Managed Lustre metrics from Azure Monitor, and exposes cached Prometheus metrics on `/metrics`.
+The exporter discovers Azure resources with Azure Resource Graph, reads Managed
+Lustre telemetry from Azure Monitor, and exposes cached Prometheus metrics on
+`/metrics`. It is designed for AKS deployments with active/standby leader
+election so only one replica queries Azure while Service-based scrapes remain
+stable during rollouts.
 
 ## Features
 
 - Discover VM Scale Sets across one or more Azure subscriptions.
 - Export actual VMSS instance count and desired VMSS capacity.
+- Discover standalone, non-VMSS Azure VMs by VM size and power state.
 - Discover Azure Managed Lustre filesystems.
 - Export key Managed Lustre OST and MDT metrics.
 - Export filesystem inventory metrics so every discovered Lustre filesystem is visible in Grafana.
 - Support local Azure CLI auth, Service Principal auth, Managed Identity, and AKS Workload Identity.
 - Optional Kubernetes leader election for HA deployments.
+
+## Documentation
+
+| Topic | Document |
+| --- | --- |
+| Metric catalog and PromQL examples | [docs/metrics.md](docs/metrics.md) |
+| Grafana dashboards, alert rules, and Azure Monitor managed Prometheus scraping | [docs/grafana-prometheus.md](docs/grafana-prometheus.md) |
+| Leader election and rollout handoff behavior | [docs/leader-election.md](docs/leader-election.md) |
+| Managed Lustre pressure testing | [docs/lustre-pressure-test.md](docs/lustre-pressure-test.md) |
+| Managed Lustre production guidance | [docs/azure-managed-lustre-production-best-practices-v2.md](docs/azure-managed-lustre-production-best-practices-v2.md) |
+| AV/HPC workload interpretation | [docs/av-industry.md](docs/av-industry.md) |
 
 ## Metrics
 
@@ -22,7 +39,8 @@ The exporter emits three metric families:
 - Standalone, non-VMSS Azure VM inventory by VM size and power state.
 - Azure Managed Lustre filesystem, OST, MDT, HSM, and derived AV/HPC signals.
 
-See the full catalog and PromQL examples in [docs/metrics.md](docs/metrics.md).
+See the full catalog in [docs/metrics.md](docs/metrics.md), and dashboard /
+alerting guidance in [docs/grafana-prometheus.md](docs/grafana-prometheus.md).
 
 Quick samples:
 
@@ -151,67 +169,11 @@ Port-forward the exporter:
 make port-forward
 ```
 
-## Grafana
+## Observability assets
 
-Import the dashboards from `deploy/`:
-
-- [deploy/grafana-dashboard-vmss.json](deploy/grafana-dashboard-vmss.json)
-- [deploy/grafana-dashboard-lustre.json](deploy/grafana-dashboard-lustre.json)
-
-The Managed Lustre dashboard uses filesystem inventory metrics for dropdowns, so discovered filesystems remain visible even when Azure Monitor has no current OST or MDT sample for a filesystem.
-
-The Managed Lustre dashboard uses an AV/HPC Lustre operations layout with rows for overview, metadata triage, OST data path, storage capacity, client I/O, metadata performance, reliability and freshness, and inventory. The `Metadata triage` row groups metadata amplification, MDT latency, MDT operations, MDT inode usage, and MDT byte usage for FSx-for-Lustre versus AMLFS customer discussions, while the `OST data path` row keeps data-path latency, operations, and connected-client visibility for large sensor logs and write-heavy phases.
-
-For AV-specific interpretation of metadata-heavy workload signals, see [docs/av-industry.md](docs/av-industry.md).
-
-## Prometheus alert rules
-
-[deploy/lustre-alert-rules.yaml](deploy/lustre-alert-rules.yaml) ships ready-to-use alert rules for the Managed Lustre signals, including:
-
-- `AzureManagedLustreCollectorStale` — collection has not completed recently.
-- `AzureManagedLustreSampleStale` — per-OST Azure Monitor sample is stale.
-- `AzureManagedLustreMdtSampleStale` and `AzureManagedLustreFilesystemSampleStale` — MDT or derived filesystem sample freshness is stale.
-- `AzureManagedLustreCollectionErrors` — non-zero collection error rate.
-- `AzureManagedLustreOstAvailablePercentLow` — OST available capacity below threshold.
-- `AzureManagedLustreOstUsedPercentWarn` and `AzureManagedLustreOstUsedPercentCritical` — OST used-capacity guardrails.
-- `AzureManagedLustreMdtBytesUsedPercentWarn` and `AzureManagedLustreMdtBytesUsedPercentCritical` — MDT byte-capacity guardrails.
-- `AzureManagedLustreMdtInodeUsedPercentWarn` and `AzureManagedLustreMdtInodeUsedPercentCritical` — MDT inode/file-count guardrails.
-- `AzureManagedLustreMdtLatencyWarn`, `AzureManagedLustreMdtLatencySerious`, and `AzureManagedLustreMdtLatencyHang` — MDT latency risk bands.
-- `AzureManagedLustreHsmActionErrors`, `AzureManagedLustreHsmBacklog`, and `AzureManagedLustreHsmBacklogCritical` — HSM reliability and backlog alerts.
-- `AzureManagedLustreClientEvictions` and `AzureManagedLustreClientEvictionBurst` — client reconnect/disruption alerts.
-- `AzureManagedLustreMetadataAmplificationHigh` and `AzureManagedLustreMetadataAmplificationCritical` — AV/HPC metadata-heavy workload alerts.
-- `AzureManagedLustreExporterNoLeader` — leader-election failure, which pauses collection.
-
-[deploy/vmss-alert-rules.yaml](deploy/vmss-alert-rules.yaml) ships VMSS alert rules, including:
-
-- `AzureVmssExporterStale` — VMSS Resource Graph collection has not completed recently.
-- `AzureVmssCollectionErrors` — non-zero VMSS collection error rate.
-- `AzureVmssCapacityDrift` — desired VMSS capacity differs from observed VM instances for a sustained period.
-- `AzureVmInventoryStale` — standalone VM Resource Graph inventory has not completed recently.
-- `AzureVmInventoryCollectionErrors` — non-zero standalone VM inventory collection error rate.
-
-Apply with `kubectl apply -f deploy/lustre-alert-rules.yaml` and `kubectl apply -f deploy/vmss-alert-rules.yaml` against your Prometheus operator namespace, or import the groups into your alert manager of choice.
-
-## Azure Monitor managed Prometheus
-
-If you are scraping the exporter from Azure Monitor managed Prometheus, the
-[deploy/ama-metrics-settings-configmap-v1.yaml](deploy/ama-metrics-settings-configmap-v1.yaml)
-ConfigMap (namespace `kube-system`) defines a custom scrape job that targets the
-stable Kubernetes Service DNS name (`vmss-metrics-exporter.default.svc.cluster.local:8000`).
-This avoids pod-target churn during rollouts and keeps dashboard time series
-continuous. The Service itself selects only the elected leader pod and publishes
-not-ready addresses so a terminating leader remains scrapeable during the
-configured shutdown drain window. Apply the custom scrape config once per
-cluster:
-
-```bash
-kubectl apply -f deploy/ama-metrics-settings-configmap-v1.yaml
-```
-
-## Prometheus examples
-
-See [docs/metrics.md](docs/metrics.md#promql-examples) for VMSS, standalone VM,
-Managed Lustre, and collection-health PromQL examples.
+Grafana dashboards, Prometheus alert rules, Azure Monitor managed Prometheus
+scrape configuration, and operational PromQL examples are documented in
+[docs/grafana-prometheus.md](docs/grafana-prometheus.md).
 
 ## High availability
 
