@@ -156,9 +156,22 @@ curl http://localhost:8000/metrics
 ## Docker
 
 ```bash
-make image IMAGE=<repo>/vmss-metrics-exporter TAG=<tag>
-make push IMAGE=<repo>/vmss-metrics-exporter TAG=<tag>
+make image-multiarch IMAGE=<repo>/vmss-metrics-exporter TAG=<tag>
 ```
+
+`make image-multiarch` builds and pushes a `linux/amd64,linux/arm64` manifest.
+Use this target for AKS deployments; the cluster nodes are `amd64`, so a
+single-arch image built on an `aarch64` workstation will fail to pull with
+`no match for platform in manifest`. A `docker-container` buildx builder is
+required for true multi-arch builds, for example:
+
+```bash
+docker buildx create --name multi --use --driver docker-container
+```
+
+`make image` remains useful for local smoke tests only because it builds for the
+host architecture. `make push` pushes that single-arch local image and should not
+be used for AKS rollout images.
 
 Run locally with Docker:
 
@@ -179,9 +192,14 @@ Deploy:
 
 ```bash
 make deploy
-make deploy-image IMAGE=<repo>/vmss-metrics-exporter TAG=<tag>
 make rollout
 ```
+
+The checked-in AKS manifest currently runs two replicas with native Lease leader
+election, leader-only Service routing, a 15-second graceful drain, and
+`publishNotReadyAddresses: true` on the metrics Service so the terminating leader
+can keep serving cached metrics during rollout handoff. The current deployed
+image tag is `zhangchl007/vmss-metrics-exporter:v36-rollout-handoff`.
 
 View logs:
 
@@ -231,6 +249,8 @@ For AV-specific interpretation of metadata-heavy workload signals, see [docs/av-
 - `AzureVmssExporterStale` — VMSS Resource Graph collection has not completed recently.
 - `AzureVmssCollectionErrors` — non-zero VMSS collection error rate.
 - `AzureVmssCapacityDrift` — desired VMSS capacity differs from observed VM instances for a sustained period.
+- `AzureVmInventoryStale` — standalone VM Resource Graph inventory has not completed recently.
+- `AzureVmInventoryCollectionErrors` — non-zero standalone VM inventory collection error rate.
 
 Apply with `kubectl apply -f deploy/lustre-alert-rules.yaml` and `kubectl apply -f deploy/vmss-alert-rules.yaml` against your Prometheus operator namespace, or import the groups into your alert manager of choice.
 
@@ -241,7 +261,10 @@ If you are scraping the exporter from Azure Monitor managed Prometheus, the
 ConfigMap (namespace `kube-system`) defines a custom scrape job that targets the
 stable Kubernetes Service DNS name (`vmss-metrics-exporter.default.svc.cluster.local:8000`).
 This avoids pod-target churn during rollouts and keeps dashboard time series
-continuous. Apply it once per cluster:
+continuous. The Service itself selects only the elected leader pod and publishes
+not-ready addresses so a terminating leader remains scrapeable during the
+configured shutdown drain window. Apply the custom scrape config once per
+cluster:
 
 ```bash
 kubectl apply -f deploy/ama-metrics-settings-configmap-v1.yaml
@@ -283,6 +306,19 @@ sum by (filesystem_name) (azure_managed_lustre_client_write_throughput_bytes_per
 # Collection health
 time() - azure_managed_lustre_last_success_timestamp_seconds
 rate(azure_managed_lustre_collection_errors_total[5m])
+
+# Standalone VM inventory
+azure_vm_exporter_vm_total
+azure_vm_info
+azure_vm_power_state
+azure_vm_count_by_size
+
+# Standalone VM power state count
+sum by (state) (
+  (azure_vm_power_state == 1)
+  * on (subscription_id, resource_group, vm_name) group_left ()
+  azure_vm_info
+)
 ```
 
 ## High availability
@@ -307,6 +343,13 @@ For smoother rolling updates, set `SHUTDOWN_DRAIN_SECONDS` (for example `15`) an
 ensure `terminationGracePeriodSeconds` is larger than that value. This lets the
 terminating leader continue serving cached metrics briefly after releasing the
 Lease while the new leader acquires and warms up.
+
+The metrics Service should keep `publishNotReadyAddresses: true` together with
+the leader-only selector. Kubernetes marks a terminating pod not-ready before the
+new leader has necessarily acquired the Lease and collected metrics; publishing
+not-ready addresses keeps the old leader reachable only during the drain window.
+It does not expose idle followers because the Service selector still requires
+`vmss-metrics-exporter-leader=true`.
 
 ## Pressure testing Azure Managed Lustre
 

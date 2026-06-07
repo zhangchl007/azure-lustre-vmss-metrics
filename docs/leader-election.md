@@ -196,7 +196,15 @@ The Service selector is:
 selector:
   app.kubernetes.io/name: vmss-metrics-exporter
   vmss-metrics-exporter-leader: "true"
+publishNotReadyAddresses: true
 ```
+
+`publishNotReadyAddresses: true` is intentional. During a rolling update,
+Kubernetes marks the terminating leader pod not-ready before the replacement pod
+has necessarily acquired the Lease, collected once, and patched its leader label.
+Publishing not-ready addresses keeps the old leader reachable during
+`SHUTDOWN_DRAIN_SECONDS`, while the leader-only selector still prevents scrapes
+from reaching idle followers.
 
 ### Promotion ordering
 
@@ -226,6 +234,8 @@ so the Lease is released without invoking the demotion callback. The pod is
 already terminating, and avoiding metric clearing prevents scrape blanks during
 endpoint removal latency. With `SHUTDOWN_DRAIN_SECONDS > 0`, the process also
 keeps serving cached metrics briefly after Lease release to bridge the handoff.
+The metrics Service publishes not-ready leader addresses so this drain remains
+reachable after Kubernetes flips the terminating pod readiness state.
 
 ## Poller wake-up behavior
 
@@ -307,14 +317,20 @@ For a graceful rolling update:
 4. Standby/new pod observes the releasable Lease on its next retry tick.
 5. New leader collects once immediately.
 6. New leader patches its pod label to enter the Service endpoints.
-7. Service scrapes continue returning leader metrics.
+7. Service scrapes continue returning leader metrics. If the old leader is
+   already terminating, `publishNotReadyAddresses: true` keeps it reachable
+   through the configured drain window until the new leader endpoint appears.
 
-In the verified v24 (`v24-rollout-drain`) deployment:
+In the verified v36 (`v36-rollout-handoff`) deployment:
 
-- Service endpoint contained only the leader pod IP.
-- Repeated Service scrapes returned leader metrics.
-- Controlled rollout samplers during restart observed no bad successful samples
-  and no scrape errors (`bad=0`, `err=0`) for VMSS timeline checks.
+- The pushed image manifest contains both `linux/amd64` and `linux/arm64`.
+- The Service has `publishNotReadyAddresses=true` and still selects only pods
+  labeled `vmss-metrics-exporter-leader=true`.
+- Service scrape verification returned `azure_vmss_exporter_vmss_total 20`, 20
+  `azure_vmss_instance_count` series, `azure_vm_exporter_vm_total 14`, 14
+  `azure_vm_info` series, 84 `azure_vm_power_state` series, 6
+  `azure_vm_count_by_size` buckets, and zero VMSS / standalone-VM collection
+  errors.
 
 ## Operational verification
 

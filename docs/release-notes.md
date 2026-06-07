@@ -1,10 +1,10 @@
 # Release Notes
 
-## Unreleased - 2026-06-08
+## Unreleased - 2026-06-07 - Standalone VM inventory and rollout handoff
 
 ### Overview
 
-Adds standalone (non-VMSS) Azure VM inventory to the exporter and the VMSS Grafana dashboard so operators can see the full Azure VM footprint (not just scale set members) without spinning up a second tool.
+Adds standalone (non-VMSS) Azure VM inventory to the exporter and the VMSS Grafana dashboard so operators can see the full Azure VM footprint (not just scale set members) without spinning up a second tool. This update also hardens rolling updates for the HA exporter deployment and documents the required multi-arch image workflow for AKS.
 
 ### Highlights
 
@@ -23,10 +23,18 @@ Adds standalone (non-VMSS) Azure VM inventory to the exporter and the VMSS Grafa
   - `ENABLE_STANDALONE_VM_INVENTORY` (default `true`)
   - `STANDALONE_VM_MAX_INVENTORY` (default `5000`, range 100–100000)
 - Standalone-VM collection runs on the existing VMSS poll cadence and is isolated from VMSS / Managed Lustre via `with suppress(Exception)` plus a dedicated error counter, so a Resource Graph failure on the inventory query can never break the VMSS or Lustre exporters.
+- Kubernetes manifest now uses image tag `zhangchl007/vmss-metrics-exporter:v36-rollout-handoff`, keeps two replicas with native Lease leader election, and sets `publishNotReadyAddresses: true` on the leader-only metrics Service. This keeps the terminating leader reachable during `SHUTDOWN_DRAIN_SECONDS` while the new leader acquires the Lease, collects once, and patches the `vmss-metrics-exporter-leader=true` label.
+- VMSS Grafana panels that are sensitive to brief rollout scrape gaps now use `last_over_time(...[10m])`:
+  - `VMSS observed`
+  - `Top VMSS instance count`
+  - `Top VMSS timeline`
+- The `Standalone VMs by power state` dashboard query now explicitly parenthesizes `(azure_vm_power_state == 1)` before joining to `azure_vm_info`, avoiding ambiguous PromQL operator precedence.
+- Image build guidance now requires `make image-multiarch TAG=<tag>` for AKS images. A `docker-container` buildx builder is required for true `linux/amd64,linux/arm64` manifests; single-arch `make image` is only for local smoke tests.
 
 ### Notes
 
 - Worst-case per-VM series budget: `8` (info) + `6` (power_state) = `14` series per VM, plus one shared `azure_vm_count_by_size` series per distinct SKU.
+- Verified live v36 exporter scrape after rollout: 20 VMSS, 14 standalone VMs, 84 standalone power-state series, 6 VM-size buckets, and zero VMSS / standalone-VM collection errors.
 - Resolves issue [#11](https://github.com/zhangchl007/azure-lustre-vmss-metrics/issues/11).
 
 
