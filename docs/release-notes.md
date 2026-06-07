@@ -30,6 +30,7 @@ Adds standalone (non-VMSS) Azure VM inventory to the exporter and the VMSS Grafa
   - `Top VMSS timeline`
 - The `Standalone VMs by power state` dashboard query now explicitly parenthesizes `(azure_vm_power_state == 1)` before joining to `azure_vm_info`, avoiding ambiguous PromQL operator precedence.
 - Image build guidance now requires `make image-multiarch TAG=<tag>` for AKS images. A `docker-container` buildx builder is required for true `linux/amd64,linux/arm64` manifests; single-arch `make image` is only for local smoke tests.
+- README now stays sample-oriented; the detailed metric catalog and PromQL examples live in `docs/metrics.md`.
 
 ### Notes
 
