@@ -758,69 +758,6 @@
     },
     {
       "type": "row",
-      "id": 103,
-      "title": "Capacity vs actual",
-      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 56},
-      "collapsed": true,
-      "panels": [
-        {
-          "type": "timeseries",
-          "id": 12,
-          "title": "Capacity vs actual (selected VMSS)",
-          "description": "Compare desired VMSS capacity to actual observed VM count. Use the vmss_name variable to focus on specific scale sets.",
-          "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-          "gridPos": {"h": 10, "w": 24, "x": 0, "y": 57},
-          "targets": [
-            {
-              "expr": "max by (subscription_id, resource_group, vmss_name, location, orchestration_mode) (\n  azure_vmss_capacity{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", vmss_name=~\"$vmss_name\", location=~\"$location\"}\n)",
-              "legendFormat": "{{vmss_name}} · {{resource_group}} capacity",
-              "refId": "A"
-            },
-            {
-              "expr": "max by (subscription_id, resource_group, vmss_name, location, orchestration_mode) (\n  azure_vmss_instance_count{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", vmss_name=~\"$vmss_name\", location=~\"$location\"}\n)",
-              "legendFormat": "{{vmss_name}} · {{resource_group}} actual",
-              "refId": "B"
-            }
-          ],
-          "fieldConfig": {
-            "defaults": {
-              "custom": {
-                "drawStyle": "line",
-                "lineInterpolation": "stepAfter",
-                "lineWidth": 1,
-                "fillOpacity": 0,
-                "showPoints": "never",
-                "spanNulls": true
-              },
-              "color": {"mode": "palette-classic"},
-              "unit": "short",
-              "decimals": 0,
-              "min": 0
-            },
-            "overrides": [
-              {
-                "matcher": {"id": "byRegexp", "options": ".*capacity$"},
-                "properties": [
-                  {"id": "custom.lineStyle", "value": {"fill": "dash", "dash": [10, 10]}},
-                  {"id": "custom.lineWidth", "value": 1}
-                ]
-              }
-            ]
-          },
-          "options": {
-            "legend": {
-              "displayMode": "table",
-              "placement": "right",
-              "showLegend": true,
-              "calcs": ["lastNotNull"]
-            },
-            "tooltip": {"mode": "multi", "sort": "desc"}
-          }
-        }
-      ]
-    },
-    {
-      "type": "row",
       "id": 105,
       "title": "Standalone VM inventory (non-VMSS)",
       "gridPos": {"h": 1, "w": 24, "x": 0, "y": 68},
