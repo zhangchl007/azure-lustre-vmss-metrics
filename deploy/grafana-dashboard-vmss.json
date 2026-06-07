@@ -548,13 +548,13 @@
     {
       "type": "bargauge",
       "id": 205,
-      "title": "Top 5 VM sizes by instances",
-      "description": "Top VM sizes ranked by current observed VMSS instance count. This highlights the SKU families consuming the most VMSS instances in the selected scope.",
+      "title": "Top 20 VM sizes by instances",
+      "description": "Top 20 VM sizes ranked by current observed VMSS instance count. This highlights the SKU families consuming the most VMSS instances in the selected scope.",
       "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
       "gridPos": {"h": 12, "w": 6, "x": 8, "y": 38},
       "targets": [
         {
-          "expr": "topk(5,\n  sum by (vm_size) (\n    max by (subscription_id, resource_group, vmss_name, location, orchestration_mode) (\n      azure_vmss_instance_count{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", vmss_name=~\"$vmss_name\", location=~\"$location\"}\n    )\n    * on (subscription_id, resource_group, vmss_name, location, orchestration_mode) group_left(vm_size)\n    max by (subscription_id, resource_group, vmss_name, location, orchestration_mode, vm_size) (\n      azure_vmss_info{job=\"$job\"}\n    )\n  )\n)",
+          "expr": "topk(20,\n  sum by (vm_size) (\n    max by (subscription_id, resource_group, vmss_name, location, orchestration_mode) (\n      azure_vmss_instance_count{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", vmss_name=~\"$vmss_name\", location=~\"$location\"}\n    )\n    * on (subscription_id, resource_group, vmss_name, location, orchestration_mode) group_left(vm_size)\n    max by (subscription_id, resource_group, vmss_name, location, orchestration_mode, vm_size) (\n      azure_vmss_info{job=\"$job\"}\n    )\n  )\n)",
           "legendFormat": "{{vm_size}}",
           "refId": "A",
           "instant": true
