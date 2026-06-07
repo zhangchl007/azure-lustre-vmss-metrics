@@ -422,14 +422,26 @@ Possible causes:
 
 - API server latency exceeds `renew_deadline_seconds`;
 - Kubernetes API request timeouts are hit;
+- ServiceAccount token projection or Kubernetes API authentication is unhealthy;
 - pod/network instability.
 
 Check Lease transitions and logs:
 
 ```bash
 kubectl -n default get lease vmss-metrics-exporter -o yaml
-kubectl -n default logs -l app.kubernetes.io/name=vmss-metrics-exporter --since=30m | grep -E 'Acquired|Released|Failed to renew|Lost Kubernetes Lease'
+kubectl -n default logs -l app.kubernetes.io/name=vmss-metrics-exporter --since=30m | grep -E 'Acquired|Released|Failed to renew|Lost Kubernetes Lease|401 Unauthorized'
 ```
+
+The exporter follows Kubernetes ServiceAccount token-rotation best practice for
+leader-election API calls. It uses the projected in-cluster token file rather
+than assuming the process-start token remains valid forever, and keeps both
+Kubernetes Python client auth keys (`authorization` and `BearerToken`) in sync.
+When the Kubernetes API still returns `401 Unauthorized` during Lease read/create
+or replace, the exporter treats it as a stale in-cluster ServiceAccount
+token/client: it reloads projected in-cluster credentials, rebuilds the
+Kubernetes Lease client, and retries the failed operation once. Repeated 401s
+after that recovery usually indicate cluster authentication/RBAC health outside
+the exporter process.
 
 If transitions are frequent, consider increasing the timing values while
 preserving validation constraints, for example `lease=15`, `renew=10`, `retry=2`.

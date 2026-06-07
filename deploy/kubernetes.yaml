@@ -121,7 +121,7 @@ spec:
                     app.kubernetes.io/name: vmss-metrics-exporter
       containers:
         - name: exporter
-          image: zhangchl007/vmss-metrics-exporter:v36-rollout-handoff
+          image: zhangchl007/vmss-metrics-exporter:v37-leader-auth-recovery
           imagePullPolicy: IfNotPresent
           ports:
             - name: metrics

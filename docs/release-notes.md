@@ -24,6 +24,7 @@ Adds standalone (non-VMSS) Azure VM inventory to the exporter and the VMSS Grafa
   - `STANDALONE_VM_MAX_INVENTORY` (default `5000`, range 100–100000)
 - Standalone-VM collection runs on the existing VMSS poll cadence and is isolated from VMSS / Managed Lustre via `with suppress(Exception)` plus a dedicated error counter, so a Resource Graph failure on the inventory query can never break the VMSS or Lustre exporters.
 - Kubernetes manifest now uses image tag `zhangchl007/vmss-metrics-exporter:v36-rollout-handoff`, keeps two replicas with native Lease leader election, and sets `publishNotReadyAddresses: true` on the leader-only metrics Service. This keeps the terminating leader reachable during `SHUTDOWN_DRAIN_SECONDS` while the new leader acquires the Lease, collects once, and patches the `vmss-metrics-exporter-leader=true` label.
+- Leader election now follows Kubernetes projected ServiceAccount token rotation best practice: the Kubernetes client refresh path rereads the mounted token file and keeps both Python-client auth keys (`authorization` and `BearerToken`) synchronized. If the API still returns `401 Unauthorized`, the exporter reloads in-cluster credentials, rebuilds the Lease client, and retries the failed Lease read/create/replace once. This prevents stale-token 401 loops from pausing acquisition or renewal.
 - VMSS Grafana panels that are sensitive to brief rollout scrape gaps now use `last_over_time(...[10m])`:
   - `VMSS observed`
   - `Top VMSS instance count`

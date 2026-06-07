@@ -20,6 +20,7 @@ but implements the election directly with ``coordination.k8s.io/v1 Lease``:
 from __future__ import annotations
 
 import logging
+import os
 import threading
 import time
 from collections.abc import Callable
@@ -28,6 +29,8 @@ from datetime import datetime, timezone
 from typing import Any, Literal, Protocol
 
 LOGGER = logging.getLogger(__name__)
+
+_DEFAULT_SERVICE_ACCOUNT_TOKEN_FILE = "/var/run/secrets/kubernetes.io/serviceaccount/token"
 
 _JITTER_FACTOR = 1.2
 
@@ -188,12 +191,14 @@ class _LeaseElection:
         on_started_leading: Callable[[], None],
         on_stopped_leading: Callable[[], None],
         coordination_api: object,
+        coordination_api_factory: Callable[[], object] | None = None,
         stop_event: threading.Event | None = None,
     ) -> None:
         self._config = config
         self._on_started_leading = on_started_leading
         self._on_stopped_leading = on_stopped_leading
         self._coordination_api = coordination_api
+        self._coordination_api_factory = coordination_api_factory
         self._stop_event = stop_event or threading.Event()
         self._state_lock = threading.Lock()
         self._api_lock = threading.Lock()
@@ -300,6 +305,8 @@ class _LeaseElection:
             try:
                 lease = self._read_lease()
             except Exception as exc:  # noqa: BLE001 - status varies by client version
+                if _api_status(exc) == 401:
+                    raise
                 if _api_status(exc) != 404:
                     LOGGER.warning("Failed to read Kubernetes Lease for acquisition: %s", exc)
                     return False
@@ -331,6 +338,8 @@ class _LeaseElection:
                 lease = self._read_lease()
             except Exception as exc:  # noqa: BLE001
                 status = _api_status(exc)
+                if status == 401:
+                    raise
                 if status == 404:
                     return _TRANSIENT
                 LOGGER.warning("Failed to read Kubernetes Lease for renewal: %s", exc)
@@ -367,6 +376,17 @@ class _LeaseElection:
             self._observe_lease(created, time.monotonic())
             return True
         except Exception as exc:  # noqa: BLE001
+            if _api_status(exc) == 401 and self._refresh_coordination_api("create Lease"):
+                try:
+                    created = self._coordination_api.create_namespaced_lease(
+                        namespace=self._config.lock_namespace,
+                        body=body,
+                        _request_timeout=self._request_timeout,
+                    )
+                    self._observe_lease(created, time.monotonic())
+                    return True
+                except Exception as retry_exc:  # noqa: BLE001
+                    exc = retry_exc
             if _api_status(exc) != 409:
                 LOGGER.warning("Failed to create Kubernetes Lease: %s", exc)
             return False
@@ -399,6 +419,18 @@ class _LeaseElection:
             self._observe_lease(updated, time.monotonic())
             return True
         except Exception as exc:  # noqa: BLE001
+            if _api_status(exc) == 401 and self._refresh_coordination_api("replace Lease"):
+                try:
+                    updated = self._coordination_api.replace_namespaced_lease(
+                        name=self._config.lock_name,
+                        namespace=self._config.lock_namespace,
+                        body=body,
+                        _request_timeout=self._request_timeout,
+                    )
+                    self._observe_lease(updated, time.monotonic())
+                    return True
+                except Exception as retry_exc:  # noqa: BLE001
+                    exc = retry_exc
             if _api_status(exc) != 409:
                 LOGGER.warning("Failed to replace Kubernetes Lease: %s", exc)
             return False
@@ -436,11 +468,35 @@ class _LeaseElection:
             time.sleep(min(0.1, self._config.retry_period_seconds / 10))
 
     def _read_lease(self) -> object:
-        return self._coordination_api.read_namespaced_lease(
-            name=self._config.lock_name,
-            namespace=self._config.lock_namespace,
-            _request_timeout=self._request_timeout,
+        try:
+            return self._coordination_api.read_namespaced_lease(
+                name=self._config.lock_name,
+                namespace=self._config.lock_namespace,
+                _request_timeout=self._request_timeout,
+            )
+        except Exception as exc:  # noqa: BLE001
+            if _api_status(exc) == 401 and self._refresh_coordination_api("read Lease"):
+                return self._coordination_api.read_namespaced_lease(
+                    name=self._config.lock_name,
+                    namespace=self._config.lock_namespace,
+                    _request_timeout=self._request_timeout,
+                )
+            raise
+
+    def _refresh_coordination_api(self, operation: str) -> bool:
+        if self._coordination_api_factory is None:
+            return False
+        LOGGER.warning(
+            "Kubernetes API returned 401 Unauthorized during %s; reloading "
+            "in-cluster credentials and retrying once",
+            operation,
         )
+        try:
+            self._coordination_api = self._coordination_api_factory()
+        except Exception:  # noqa: BLE001 - caller will handle the original API failure
+            LOGGER.exception("Failed to reload Kubernetes credentials after 401")
+            return False
+        return True
 
     def _lease_body(
         self,
@@ -545,8 +601,18 @@ def _build_real_election(
         on_started_leading=on_started_leading,
         on_stopped_leading=on_stopped_leading,
         coordination_api=client.CoordinationV1Api(),
+        coordination_api_factory=_reload_incluster_coordination_api,
         stop_event=stop_event,
     )
+
+
+def _reload_incluster_coordination_api() -> object:
+    """Reload the projected ServiceAccount token and build a fresh Lease client."""
+
+    from kubernetes import client
+
+    load_incluster_kube_config()
+    return client.CoordinationV1Api()
 
 
 def load_incluster_kube_config() -> None:
@@ -587,7 +653,15 @@ def _normalize_bearer_token_scheme(configuration: object) -> None:
 
 
 def _wrap_refresh_api_key_hook(configuration: object) -> None:
-    """Keep refreshed in-cluster tokens compatible with Kubernetes client 36."""
+    """Keep projected in-cluster tokens compatible with Kubernetes client 36.
+
+    Kubernetes ServiceAccount tokens are projected files and can rotate while a
+    pod is running. The Python client's in-cluster refresh hook is version-
+    sensitive, so this wrapper also rereads the token file whenever auth is
+    refreshed. That keeps long-lived leader-election clients aligned with
+    Kubernetes' bounded-token best practice instead of relying on one cached
+    process-start token.
+    """
 
     refresh_api_key_hook = getattr(configuration, "refresh_api_key_hook", None)
     if not callable(refresh_api_key_hook):
@@ -595,6 +669,7 @@ def _wrap_refresh_api_key_hook(configuration: object) -> None:
 
     def wrapped_refresh_api_key_hook(config: object) -> None:
         refresh_api_key_hook(config)
+        _refresh_service_account_token_from_file(config)
         _normalize_bearer_token_scheme(config)
         # The Kubernetes in-cluster refresh hook calls its private _set_config(),
         # which reassigns ``config.refresh_api_key_hook`` back to the original
@@ -604,6 +679,31 @@ def _wrap_refresh_api_key_hook(configuration: object) -> None:
         config.refresh_api_key_hook = wrapped_refresh_api_key_hook
 
     configuration.refresh_api_key_hook = wrapped_refresh_api_key_hook
+
+
+def _refresh_service_account_token_from_file(
+    configuration: object,
+    token_file: str | None = None,
+) -> bool:
+    """Refresh Kubernetes auth keys from the projected ServiceAccount token file."""
+
+    api_key = getattr(configuration, "api_key", None)
+    if not isinstance(api_key, dict):
+        return False
+    path = token_file or os.getenv(
+        "KUBERNETES_SERVICEACCOUNT_TOKEN_FILE",
+        _DEFAULT_SERVICE_ACCOUNT_TOKEN_FILE,
+    )
+    try:
+        with open(path, encoding="utf-8") as token_handle:
+            token = token_handle.read().strip()
+    except OSError:
+        return False
+    if not token:
+        return False
+    api_key["authorization"] = f"Bearer {token}"
+    api_key["BearerToken"] = f"Bearer {token}"
+    return True
 
 
 def _spec_attr(lease: object, attr_name: str) -> Any:

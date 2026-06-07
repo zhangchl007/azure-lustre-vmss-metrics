@@ -16,6 +16,7 @@ from vmss_metrics_exporter.leader_election import (
     _build_real_election,
     _LeaseElection,
     _normalize_bearer_token_scheme,
+    _refresh_service_account_token_from_file,
     _wrap_refresh_api_key_hook,
 )
 
@@ -30,6 +31,9 @@ class FakeCoordinationV1Api:
     def __init__(self, lease: object | None = None) -> None:
         self.lease = copy.deepcopy(lease)
         self.next_resource_version = 1
+        self.read_failures: list[int] = []
+        self.create_failures: list[int] = []
+        self.replace_failures: list[int] = []
         self.replace_conflicts_remaining = 0
         self.create_calls = 0
         self.replace_calls = 0
@@ -48,6 +52,8 @@ class FakeCoordinationV1Api:
         _request_timeout: tuple[float, float] | None = None,
     ) -> object:
         self.request_timeouts.append(_request_timeout)
+        if self.read_failures:
+            raise ApiStatusError(self.read_failures.pop(0))
         if self.lease is None:
             raise ApiStatusError(404)
         assert self.lease.metadata.name == name
@@ -63,6 +69,8 @@ class FakeCoordinationV1Api:
     ) -> object:
         self.request_timeouts.append(_request_timeout)
         self.create_calls += 1
+        if self.create_failures:
+            raise ApiStatusError(self.create_failures.pop(0))
         if self.lease is not None:
             raise ApiStatusError(409)
         assert body.metadata.namespace == namespace
@@ -81,6 +89,8 @@ class FakeCoordinationV1Api:
     ) -> object:
         self.request_timeouts.append(_request_timeout)
         self.replace_calls += 1
+        if self.replace_failures:
+            raise ApiStatusError(self.replace_failures.pop(0))
         if self.lease is None:
             raise ApiStatusError(404)
         if self.replace_conflicts_remaining > 0:
@@ -173,12 +183,14 @@ def _make_election(
     started: Callable[[], None] | None = None,
     stopped: Callable[[], None] | None = None,
     stop_event: threading.Event | None = None,
+    coordination_api_factory: Callable[[], object] | None = None,
 ) -> _LeaseElection:
     return _LeaseElection(
         config=config or _make_config(),
         on_started_leading=started or (lambda: None),
         on_stopped_leading=stopped or (lambda: None),
         coordination_api=api,
+        coordination_api_factory=coordination_api_factory,
         stop_event=stop_event,
     )
 
@@ -230,6 +242,71 @@ def test_lease_election_creates_missing_lease() -> None:
     assert api.lease.spec.holder_identity == "test-pod-0"
     assert api.lease.spec.lease_duration_seconds == 5
     assert api.lease.spec.lease_transitions == 0
+
+
+def test_lease_election_recovers_from_unauthorized_read_during_acquire() -> None:
+    stale_api = FakeCoordinationV1Api()
+    stale_api.read_failures.append(401)
+    refreshed_api = FakeCoordinationV1Api()
+    refresh_calls = 0
+
+    def refresh_api() -> object:
+        nonlocal refresh_calls
+        refresh_calls += 1
+        return refreshed_api
+
+    election = _make_election(stale_api, coordination_api_factory=refresh_api)
+
+    assert election._try_acquire_once() is True
+
+    assert refresh_calls == 1
+    assert stale_api.create_calls == 0
+    assert refreshed_api.create_calls == 1
+    assert refreshed_api.lease.spec.holder_identity == "test-pod-0"
+
+
+def test_lease_election_recovers_from_unauthorized_read_during_renewal() -> None:
+    lease = _make_lease(holder_identity="test-pod-0")
+    stale_api = FakeCoordinationV1Api(lease)
+    stale_api.read_failures.append(401)
+    refreshed_api = FakeCoordinationV1Api(lease)
+    refresh_calls = 0
+
+    def refresh_api() -> object:
+        nonlocal refresh_calls
+        refresh_calls += 1
+        return refreshed_api
+
+    election = _make_election(stale_api, coordination_api_factory=refresh_api)
+
+    assert election._renew_once() == "renewed"
+
+    assert refresh_calls == 1
+    assert stale_api.replace_calls == 0
+    assert refreshed_api.replace_calls == 1
+    assert refreshed_api.lease.spec.holder_identity == "test-pod-0"
+
+
+def test_lease_election_retries_replace_after_unauthorized() -> None:
+    lease = _make_lease(holder_identity="test-pod-0")
+    stale_api = FakeCoordinationV1Api(lease)
+    stale_api.replace_failures.append(401)
+    refreshed_api = FakeCoordinationV1Api(lease)
+    refresh_calls = 0
+
+    def refresh_api() -> object:
+        nonlocal refresh_calls
+        refresh_calls += 1
+        return refreshed_api
+
+    election = _make_election(stale_api, coordination_api_factory=refresh_api)
+
+    assert election._renew_once() == "renewed"
+
+    assert refresh_calls == 1
+    assert stale_api.replace_calls == 1
+    assert refreshed_api.replace_calls == 1
+    assert refreshed_api.lease.spec.holder_identity == "test-pod-0"
 
 
 def test_lease_election_bounds_kubernetes_api_request_timeout() -> None:
@@ -414,7 +491,56 @@ def test_refresh_api_key_hook_keeps_bearer_token_key_in_sync() -> None:
     assert config.api_key["BearerToken"] == "Bearer refreshed-token"
 
 
-def test_refresh_api_key_hook_reinstalls_wrapper_after_incluster_refresh() -> None:
+def test_service_account_token_file_refresh_updates_both_kubernetes_auth_keys(
+    tmp_path: pytest.TempPathFactory,
+) -> None:
+    token_file = tmp_path / "token"
+    token_file.write_text("projected-token\n")
+
+    class Config:
+        api_key = {"authorization": "Bearer old-token", "BearerToken": "Bearer old-token"}
+
+    config = Config()
+
+    assert _refresh_service_account_token_from_file(config, str(token_file)) is True
+
+    assert config.api_key["authorization"] == "Bearer projected-token"
+    assert config.api_key["BearerToken"] == "Bearer projected-token"
+
+
+def test_refresh_api_key_hook_uses_latest_projected_token_file(
+    tmp_path: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    token_file = tmp_path / "token"
+    token_file.write_text("first-token\n")
+    monkeypatch.setenv("KUBERNETES_SERVICEACCOUNT_TOKEN_FILE", str(token_file))
+
+    class Config:
+        api_key = {"authorization": "Bearer old-token", "BearerToken": "Bearer old-token"}
+
+        def refresh_api_key_hook(self, config: object) -> None:
+            self.api_key["authorization"] = "bearer stale-hook-token"
+
+    config = Config()
+    _wrap_refresh_api_key_hook(config)
+
+    config.refresh_api_key_hook(config)
+    token_file.write_text("second-token\n")
+    config.refresh_api_key_hook(config)
+
+    assert config.api_key["authorization"] == "Bearer second-token"
+    assert config.api_key["BearerToken"] == "Bearer second-token"
+
+
+def test_refresh_api_key_hook_reinstalls_wrapper_after_incluster_refresh(
+    tmp_path: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    token_file = tmp_path / "token"
+    token_file.write_text("projected-token\n")
+    monkeypatch.setenv("KUBERNETES_SERVICEACCOUNT_TOKEN_FILE", str(token_file))
+
     class Config:
         api_key = {"authorization": "Bearer old-token", "BearerToken": "Bearer old-token"}
 
@@ -433,8 +559,8 @@ def test_refresh_api_key_hook_reinstalls_wrapper_after_incluster_refresh() -> No
     config.refresh_api_key_hook(config)
 
     assert config.refresh_api_key_hook is first_hook
-    assert config.api_key["authorization"] == "Bearer refreshed-token"
-    assert config.api_key["BearerToken"] == "Bearer refreshed-token"
+    assert config.api_key["authorization"] == "Bearer projected-token"
+    assert config.api_key["BearerToken"] == "Bearer projected-token"
 
 
 def test_runner_invokes_callbacks_on_leadership_change() -> None:
