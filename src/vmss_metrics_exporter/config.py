@@ -29,6 +29,8 @@ class Settings:
     lustre_metrics_interval: str = "PT1M"
     lustre_metrics_max_workers: int = 4
     lustre_metrics_request_jitter_seconds: float = 0.5
+    enable_standalone_vm_inventory: bool = True
+    standalone_vm_max_inventory: int = 5000
     leader_election_enabled: bool = False
     leader_election_lock_name: str = "vmss-metrics-exporter"
     leader_election_namespace: str = "default"
@@ -81,6 +83,16 @@ def load_settings(*, require_subscription_ids: bool = True) -> Settings:
         ),
         lustre_metrics_request_jitter_seconds=_get_float(
             "LUSTRE_METRICS_REQUEST_JITTER_SECONDS", default=0.5, minimum=0.0, maximum=60.0
+        ),
+        enable_standalone_vm_inventory=_get_bool(
+            "ENABLE_STANDALONE_VM_INVENTORY", default=True
+        ),
+        # Cardinality guardrail for ``azure_vm_info`` / ``azure_vm_power_state``.
+        # Subscriptions with more standalone VMs than this still get aggregate
+        # ``azure_vm_count_by_size`` series; per-VM series are suppressed to
+        # keep Prometheus memory bounded.
+        standalone_vm_max_inventory=_get_int(
+            "STANDALONE_VM_MAX_INVENTORY", default=5000, minimum=100, maximum=100000
         ),
         shutdown_drain_seconds=_get_float(
             "SHUTDOWN_DRAIN_SECONDS", default=0.0, minimum=0.0, maximum=120.0

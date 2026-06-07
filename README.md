@@ -28,6 +28,22 @@ The exporter discovers resources with Azure Resource Graph, reads Managed Lustre
 | `azure_vmss_exporter_collection_duration_seconds` | Latest VMSS collection duration. |
 | `azure_vmss_exporter_collection_errors_total` | VMSS collection error counter. |
 
+### Standalone VM inventory metrics
+
+Standalone (non-VMSS) Azure VMs only — VMSS members are intentionally excluded so these series never double-count against `azure_vmss_instance_count`.
+
+| Metric | Description |
+| --- | --- |
+| `azure_vm_info` | Static inventory of standalone Azure VMs. Labels: `subscription_id`, `resource_group`, `vm_name`, `vm_id`, `location`, `zone`, `vm_size`, `os_type`. Value is always `1`. Join via `* on (subscription_id, resource_group, vm_name) group_left(...)`. |
+| `azure_vm_power_state` | Current normalized power state per VM. Extra label `state` ∈ {`running`, `stopped`, `deallocated`, `starting`, `stopping`, `unknown`}. Exactly one state series per VM has value `1` at a time. Splitting state off `azure_vm_info` keeps the info metric churn-free across power cycles. |
+| `azure_vm_count_by_size` | Number of standalone VMs aggregated by `vm_size`. Always emitted, even when per-VM series are suppressed by the cardinality guardrail. |
+| `azure_vm_exporter_vm_total` | Number of standalone VMs observed in the latest successful collection. |
+| `azure_vm_exporter_last_success_timestamp_seconds` | Last successful standalone-VM inventory collection timestamp. |
+| `azure_vm_exporter_collection_duration_seconds` | Latest standalone-VM inventory collection duration. |
+| `azure_vm_exporter_collection_errors_total` | Standalone-VM inventory collection error counter. |
+
+Worst-case series budget per VM: 8 (`azure_vm_info`) + 6 (`azure_vm_power_state`, one per state) = **14 series per VM** plus one shared `azure_vm_count_by_size` series per distinct SKU. Subscriptions with more than `STANDALONE_VM_MAX_INVENTORY` standalone VMs (default `5000`) trip the cardinality guardrail: the per-VM `azure_vm_info` and `azure_vm_power_state` series are suppressed and only the bounded `azure_vm_count_by_size` aggregate and `azure_vm_exporter_vm_total` scalar are emitted.
+
 ### Managed Lustre inventory metrics
 
 | Metric | Description |
@@ -102,6 +118,8 @@ Set configuration with environment variables. A local `.env` file is also suppor
 | `LUSTRE_METRICS_INTERVAL` | `PT1M` | Azure Monitor metric granularity. |
 | `LUSTRE_METRICS_MAX_WORKERS` | `4` | Concurrent Managed Lustre metric queries. |
 | `LUSTRE_METRICS_REQUEST_JITTER_SECONDS` | `0.5` | Maximum per-filesystem jitter before Azure Monitor metric queries, used to spread bursts and reduce 429 risk at scale. |
+| `ENABLE_STANDALONE_VM_INVENTORY` | `true` | Enable discovery and exposition of standalone (non-VMSS) Azure VM inventory (`azure_vm_info`, `azure_vm_power_state`, `azure_vm_count_by_size`). |
+| `STANDALONE_VM_MAX_INVENTORY` | `5000` | Cardinality guardrail. When the discovered standalone-VM count exceeds this value, per-VM series are suppressed and only `azure_vm_count_by_size` aggregates are emitted. Range: 100–100000. |
 | `LEADER_ELECTION_ENABLED` | `false` | Enable active/standby Kubernetes leader election. |
 | `LEADER_ELECTION_LOCK_NAME` | `vmss-metrics-exporter` | Leader-election lock name. |
 | `LEADER_ELECTION_NAMESPACE` | `default` | Leader-election namespace. |

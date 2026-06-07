@@ -11,6 +11,7 @@ from vmss_metrics_exporter.models import (
     ManagedLustreMdtOperationMetric,
     ManagedLustreOstMetric,
     ManagedLustreOstOperationMetric,
+    StandaloneVm,
     VmssCount,
 )
 
@@ -804,3 +805,195 @@ def test_stop_interrupts_polling_sleep() -> None:
     elapsed = time.monotonic() - start
     assert exporter._vmss_thread is None or not exporter._vmss_thread.is_alive()
     assert elapsed < 5.0, f"stop() took {elapsed:.2f}s; expected to interrupt the poll sleep"
+
+
+# ---------------------------------------------------------------------------
+# Standalone (non-VMSS) Azure VM inventory
+# ---------------------------------------------------------------------------
+
+
+def _make_standalone_vm(
+    vm_name: str,
+    *,
+    subscription_id: str = "sub-a",
+    resource_group: str = "rg-a",
+    vm_size: str = "Standard_D2s_v3",
+    power_state: str = "running",
+    zone: str = "1",
+    os_type: str = "Linux",
+) -> StandaloneVm:
+    return StandaloneVm(
+        subscription_id=subscription_id,
+        resource_group=resource_group,
+        vm_name=vm_name,
+        vm_id=f"id-{vm_name}",
+        location="eastus",
+        zone=zone,
+        vm_size=vm_size,
+        os_type=os_type,
+        power_state=power_state,
+    )
+
+
+def test_standalone_vm_metrics_emit_info_power_state_and_count_by_size() -> None:
+    registry = CollectorRegistry()
+    vms = [
+        _make_standalone_vm("vm-1", vm_size="Standard_D2s_v3", power_state="running"),
+        _make_standalone_vm("vm-2", vm_size="Standard_D2s_v3", power_state="deallocated"),
+        _make_standalone_vm("vm-3", vm_size="Standard_D4s_v5", power_state="stopped"),
+    ]
+    exporter = VmssMetricsExporter(
+        lambda: [],
+        collect_standalone_vms=lambda: vms,
+        registry=registry,
+    )
+
+    exporter.collect_standalone_vms_once()
+
+    metrics = generate_latest(registry).decode()
+    info_vm1 = (
+        'location="eastus",os_type="Linux",resource_group="rg-a",'
+        'subscription_id="sub-a",vm_id="id-vm-1",vm_name="vm-1",'
+        'vm_size="Standard_D2s_v3",zone="1"'
+    )
+    assert f"azure_vm_info{{{info_vm1}}} 1.0" in metrics
+
+    # Each VM exposes one series per state; only the matching state is 1.
+    assert (
+        'azure_vm_power_state{resource_group="rg-a",state="running",'
+        'subscription_id="sub-a",vm_name="vm-1"} 1.0' in metrics
+    )
+    assert (
+        'azure_vm_power_state{resource_group="rg-a",state="stopped",'
+        'subscription_id="sub-a",vm_name="vm-1"} 0.0' in metrics
+    )
+    assert (
+        'azure_vm_power_state{resource_group="rg-a",state="deallocated",'
+        'subscription_id="sub-a",vm_name="vm-2"} 1.0' in metrics
+    )
+
+    # Aggregate-by-size and total scalars.
+    assert 'azure_vm_count_by_size{vm_size="Standard_D2s_v3"} 2.0' in metrics
+    assert 'azure_vm_count_by_size{vm_size="Standard_D4s_v5"} 1.0' in metrics
+    assert "azure_vm_exporter_vm_total 3.0" in metrics
+    assert "azure_vm_exporter_last_success_timestamp_seconds" in metrics
+
+
+def test_standalone_vm_metrics_remove_stale_series_across_runs() -> None:
+    registry = CollectorRegistry()
+    first = [
+        _make_standalone_vm("vm-1", vm_size="Standard_D2s_v3", power_state="running"),
+        _make_standalone_vm("vm-2", vm_size="Standard_D2s_v3", power_state="running"),
+    ]
+    second = [
+        _make_standalone_vm("vm-1", vm_size="Standard_D4s_v5", power_state="stopped"),
+    ]
+    calls = iter([first, second])
+    exporter = VmssMetricsExporter(
+        lambda: [],
+        collect_standalone_vms=lambda: next(calls),
+        registry=registry,
+    )
+
+    exporter.collect_standalone_vms_once()
+    exporter.collect_standalone_vms_once()
+
+    metrics = generate_latest(registry).decode()
+    # vm-2 is gone, including all of its power_state series, and its old
+    # Standard_D2s_v3 vm_size bucket no longer appears.
+    assert "vm-2" not in metrics
+    # vm-1's old vm_size info series is replaced by the new one.
+    assert 'vm_size="Standard_D2s_v3"' not in metrics or "vm-1" not in metrics.split(
+        'vm_size="Standard_D2s_v3"'
+    )[1].split("\n")[0]
+    assert 'azure_vm_count_by_size{vm_size="Standard_D4s_v5"} 1.0' in metrics
+    assert "azure_vm_exporter_vm_total 1.0" in metrics
+
+
+def test_standalone_vm_cardinality_guardrail_suppresses_per_vm_series() -> None:
+    registry = CollectorRegistry()
+    # Two distinct sizes spread across many VMs so the by-size aggregate is
+    # still meaningful when per-VM info is suppressed.
+    vms = [
+        _make_standalone_vm(
+            f"vm-{i}",
+            vm_size="Standard_D2s_v3" if i % 2 == 0 else "Standard_D4s_v5",
+            power_state="running",
+        )
+        for i in range(12)
+    ]
+    exporter = VmssMetricsExporter(
+        lambda: [],
+        collect_standalone_vms=lambda: vms,
+        standalone_vm_max_inventory=10,
+        registry=registry,
+    )
+
+    exporter.collect_standalone_vms_once()
+
+    metrics = generate_latest(registry).decode()
+    # Per-VM series are suppressed entirely.
+    assert "azure_vm_info{" not in metrics
+    assert "azure_vm_power_state{" not in metrics
+    # Aggregates still emit.
+    assert 'azure_vm_count_by_size{vm_size="Standard_D2s_v3"} 6.0' in metrics
+    assert 'azure_vm_count_by_size{vm_size="Standard_D4s_v5"} 6.0' in metrics
+    assert "azure_vm_exporter_vm_total 12.0" in metrics
+    # Guardrail tripping must not increment the error counter.
+    assert "azure_vm_exporter_collection_errors_total 0.0" in metrics
+
+
+def test_collect_once_isolates_standalone_vm_failures_from_vmss_success() -> None:
+    registry = CollectorRegistry()
+    counts = [
+        VmssCount(
+            "sub-a", "rg-a", "vmss-a", "eastus", "Uniform", 3, 5,
+            vm_size="Standard_D2s_v3", sku_tier="Standard",
+        ),
+    ]
+
+    def fail_standalone() -> list[StandaloneVm]:
+        raise RuntimeError("resource graph temporarily unavailable")
+
+    exporter = VmssMetricsExporter(
+        lambda: counts,
+        collect_standalone_vms=fail_standalone,
+        registry=registry,
+    )
+
+    assert exporter.collect_once() == tuple(counts)
+    metrics = generate_latest(registry).decode()
+    assert "vmss-a" in metrics
+    assert "azure_vmss_exporter_vmss_total 1.0" in metrics
+    assert "azure_vm_exporter_collection_errors_total 1.0" in metrics
+    # No standalone-VM inventory series were published because the call failed.
+    assert "azure_vm_info{" not in metrics
+
+
+def test_set_leader_clears_standalone_vm_gauges_on_demotion() -> None:
+    registry = CollectorRegistry()
+    vms = [
+        _make_standalone_vm("vm-1", vm_size="Standard_D2s_v3", power_state="running"),
+    ]
+    exporter = VmssMetricsExporter(
+        lambda: [],
+        collect_standalone_vms=lambda: vms,
+        registry=registry,
+        leader_election_enabled=True,
+    )
+    exporter.set_leader(True)
+    exporter.collect_standalone_vms_once()
+
+    populated = generate_latest(registry).decode()
+    assert "azure_vm_info{" in populated
+    assert "azure_vm_power_state{" in populated
+    assert "azure_vm_count_by_size{" in populated
+
+    exporter.set_leader(False)
+    cleared = generate_latest(registry).decode()
+    assert "azure_vm_info{" not in cleared
+    assert "azure_vm_power_state{" not in cleared
+    assert "azure_vm_count_by_size{" not in cleared
+    assert "azure_vm_exporter_vm_total 0.0" in cleared
+    assert "azure_vm_exporter_last_success_timestamp_seconds 0.0" in cleared
+    assert "azure_vm_exporter_collection_duration_seconds 0.0" in cleared

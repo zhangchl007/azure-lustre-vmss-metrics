@@ -19,10 +19,12 @@ from .azure_managed_lustre import (
     summarize_lustre_metrics,
 )
 from .azure_resource_graph import (
+    AzureResourceGraphStandaloneVmCollector,
     AzureResourceGraphVmssCollector,
     ResourceGraphClientProtocol,
     create_resource_graph_client,
     summarize_counts,
+    summarize_standalone_vms,
 )
 from .collector import VmssMetricsExporter
 from .config import Settings, load_settings
@@ -74,6 +76,19 @@ def main(argv: list[str] | None = None) -> int:
             resource_graph_client,
             metrics_query_client,
         )
+        # Reuse the same Resource Graph client (and therefore the same shared
+        # credential / token cache / throttling bucket) for the standalone VM
+        # inventory; the VMSS poll thread serializes both calls so no extra
+        # thread-safety machinery is required.
+        standalone_vm_collector: AzureResourceGraphStandaloneVmCollector | None = None
+        if settings.enable_standalone_vm_inventory:
+            standalone_vm_collector = AzureResourceGraphStandaloneVmCollector(
+                resource_graph_client,
+                settings.subscription_ids,
+                page_size=settings.arg_page_size,
+                max_retries=settings.arg_max_retries,
+                retry_base_delay_seconds=settings.arg_retry_base_delay_seconds,
+            )
 
         if args.once:
             print(summarize_counts(collector.collect()))
@@ -81,11 +96,19 @@ def main(argv: list[str] | None = None) -> int:
                 print()
                 print("Azure Managed Lustre metrics")
                 print(summarize_lustre_metrics(lustre_collector.collect()))
+            if standalone_vm_collector is not None:
+                print()
+                print("Azure standalone VMs")
+                print(summarize_standalone_vms(standalone_vm_collector.collect()))
             return 0
 
         exporter = VmssMetricsExporter(
             collector.collect,
             collect_lustre_metrics=lustre_collector.collect if lustre_collector else None,
+            collect_standalone_vms=(
+                standalone_vm_collector.collect if standalone_vm_collector else None
+            ),
+            standalone_vm_max_inventory=settings.standalone_vm_max_inventory,
             poll_interval_seconds=settings.poll_interval_seconds,
             lustre_poll_interval_seconds=settings.lustre_poll_interval_seconds,
             leader_election_enabled=settings.leader_election_enabled,
@@ -94,12 +117,13 @@ def main(argv: list[str] | None = None) -> int:
         start_http_server(settings.port, addr=settings.host)
         LOGGER.info(
             "VMSS metrics exporter listening on http://%s:%s/metrics; VMSS polling every %ss; "
-            "Managed Lustre metrics %s%s; leader election %s",
+            "Managed Lustre metrics %s%s; standalone VM inventory %s; leader election %s",
             settings.host,
             settings.port,
             settings.poll_interval_seconds,
             "enabled" if lustre_collector else "disabled",
             f" every {settings.lustre_poll_interval_seconds}s" if lustre_collector else "",
+            "enabled" if standalone_vm_collector else "disabled",
             "enabled" if leader_election_runner else "disabled",
         )
         exporter.start()

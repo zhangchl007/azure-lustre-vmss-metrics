@@ -40,3 +40,23 @@ groups:
         annotations:
           summary: "Azure VMSS desired capacity differs from observed instance count"
           description: "{{ $labels.vmss_name }} in {{ $labels.resource_group }} has not converged to desired capacity for 15 minutes. Current absolute drift: {{ printf \"%.0f\" $value }} instances. Check AKS/nodepool scaling, quota, capacity, and VMSS provisioning errors."
+
+      - alert: AzureVmInventoryStale
+        expr: time() - max(azure_vm_exporter_last_success_timestamp_seconds) > 600
+        for: 5m
+        labels:
+          severity: warning
+          service: azure-vm
+        annotations:
+          summary: "Azure standalone VM inventory collection is stale"
+          description: "The exporter has not completed a standalone-VM Resource Graph collection for more than 10 minutes. azure_vm_info / azure_vm_power_state / azure_vm_count_by_size series may be missing or outdated. Check exporter logs, Azure auth, and Resource Graph throttling."
+
+      - alert: AzureVmInventoryCollectionErrors
+        expr: sum(rate(azure_vm_exporter_collection_errors_total[5m])) > 0
+        for: 2m
+        labels:
+          severity: warning
+          service: azure-vm
+        annotations:
+          summary: "Azure standalone VM inventory collection errors detected"
+          description: "Standalone-VM inventory collection is reporting errors. Check exporter logs, Resource Graph access, and subscription permissions. Current error rate: {{ printf \"%.4f\" $value }} errors/s."

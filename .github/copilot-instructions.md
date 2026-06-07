@@ -15,8 +15,12 @@
 
 ## Image build and deployment workflow
 
-- make image pushes the image to Docker Hub 
-- make deploy applies the Kubernetes manifests in `deploy/` to the current kubectl context cluster
+- Always build container images as multi-arch (`linux/amd64,linux/arm64`) using `make image-multiarch TAG=<tag>`. AKS nodes are `amd64`, so a single-arch image built on an `aarch64` host (or vice versa) will fail to pull with `no match for platform in manifest`.
+- A `docker-container` buildx builder is required for true multi-arch builds; create it once with `docker buildx create --name multi --use --driver docker-container`.
+- `make image` builds a single-arch image for the host architecture (use only for local `docker-run` smoke tests, never for AKS deploys).
+- `make push` pushes a single-arch image to Docker Hub; `make image-multiarch` builds AND pushes the multi-arch manifest in one step.
+- `make deploy` applies the Kubernetes manifests in `deploy/` to the current kubectl context cluster.
+- After bumping the image tag, update `deploy/kubernetes.yaml` (`image:` field) and run `make deploy` followed by `make rollout` to wait for the new pods.
 ## Project notes
 
 - Python package code lives under `src/vmss_metrics_exporter/`.

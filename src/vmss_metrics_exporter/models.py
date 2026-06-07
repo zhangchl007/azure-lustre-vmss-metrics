@@ -47,6 +47,62 @@ class VmssCount:
         )
 
 
+# Bounded set of normalized power states emitted as ``state`` labels on
+# ``azure_vm_power_state``. Keeping it small (and exhaustive for known Azure
+# transitions) means each standalone VM contributes a fixed, predictable
+# number of series regardless of which power state it is currently in.
+STANDALONE_VM_POWER_STATES: tuple[str, ...] = (
+    "running",
+    "stopped",
+    "deallocated",
+    "starting",
+    "stopping",
+    "unknown",
+)
+
+
+@dataclass(frozen=True, slots=True)
+class StandaloneVm:
+    """Discovered Azure standalone (non-VMSS) virtual machine.
+
+    Only immutable / slowly-changing fields are kept as ``azure_vm_info`` labels.
+    The current power state lives in a separate ``azure_vm_power_state`` gauge so
+    that frequent start/stop transitions do not create new Prometheus series on
+    the info metric.
+    """
+
+    subscription_id: str
+    resource_group: str
+    vm_name: str
+    vm_id: str = "unknown"
+    location: str = "unknown"
+    zone: str = ""
+    vm_size: str = "unknown"
+    os_type: str = "unknown"
+    power_state: str = "unknown"
+
+    @property
+    def info_label_values(self) -> tuple[str, str, str, str, str, str, str, str]:
+        """Return labels for the `azure_vm_info` metadata metric."""
+
+        return (
+            self.subscription_id,
+            self.resource_group,
+            self.vm_name,
+            self.vm_id,
+            self.location,
+            self.zone,
+            self.vm_size,
+            self.os_type,
+        )
+
+    @property
+    def identity_label_values(self) -> tuple[str, str, str]:
+        """Return shared identity labels used by `azure_vm_power_state`."""
+
+        return (self.subscription_id, self.resource_group, self.vm_name)
+
+
 @dataclass(frozen=True, slots=True)
 class ManagedLustreFilesystem:
     """Discovered Azure Managed Lustre filesystem resource."""

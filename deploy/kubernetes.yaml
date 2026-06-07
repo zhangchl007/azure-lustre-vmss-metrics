@@ -121,7 +121,7 @@ spec:
                     app.kubernetes.io/name: vmss-metrics-exporter
       containers:
         - name: exporter
-          image: zhangchl007/vmss-metrics-exporter:v34-lustre-dashboard-metrics
+          image: zhangchl007/vmss-metrics-exporter:v36-rollout-handoff
           imagePullPolicy: IfNotPresent
           ports:
             - name: metrics
@@ -232,6 +232,13 @@ metadata:
   labels:
     app.kubernetes.io/name: vmss-metrics-exporter
 spec:
+  # Keep the terminating leader reachable during SHUTDOWN_DRAIN_SECONDS.
+  # During a rolling update Kubernetes marks terminating pods not-ready before
+  # the new pod can acquire the Lease, collect, and patch the leader label. The
+  # Service selector is still leader-only, so publishing not-ready addresses does
+  # not expose idle followers; it only preserves the old leader's cached metrics
+  # through the handoff window.
+  publishNotReadyAddresses: true
   selector:
     app.kubernetes.io/name: vmss-metrics-exporter
     vmss-metrics-exporter-leader: "true"

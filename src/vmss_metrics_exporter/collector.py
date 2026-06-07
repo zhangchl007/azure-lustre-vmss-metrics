@@ -12,6 +12,7 @@ from prometheus_client import REGISTRY, Counter, Gauge
 from prometheus_client.registry import CollectorRegistry
 
 from .models import (
+    STANDALONE_VM_POWER_STATES,
     ManagedLustreCollectionResult,
     ManagedLustreFilesystem,
     ManagedLustreFilesystemAggregateMetric,
@@ -19,6 +20,7 @@ from .models import (
     ManagedLustreMdtOperationMetric,
     ManagedLustreOstMetric,
     ManagedLustreOstOperationMetric,
+    StandaloneVm,
     VmssCount,
     build_lustre_filesystem_aggregate_metrics,
 )
@@ -79,6 +81,27 @@ LUSTRE_FILESYSTEM_CAPACITY_LABELS = (
 )
 
 
+STANDALONE_VM_INFO_LABELS = (
+    "subscription_id",
+    "resource_group",
+    "vm_name",
+    "vm_id",
+    "location",
+    "zone",
+    "vm_size",
+    "os_type",
+)
+
+STANDALONE_VM_POWER_STATE_LABELS = (
+    "subscription_id",
+    "resource_group",
+    "vm_name",
+    "state",
+)
+
+STANDALONE_VM_COUNT_BY_SIZE_LABELS = ("vm_size",)
+
+
 class VmssMetricsExporter:
     """Poll Azure and update Prometheus gauges with cached VMSS counts."""
 
@@ -87,6 +110,8 @@ class VmssMetricsExporter:
         collect_counts: Callable[[], Sequence[VmssCount]],
         *,
         collect_lustre_metrics: Callable[[], ManagedLustreCollectionResult] | None = None,
+        collect_standalone_vms: Callable[[], Sequence[StandaloneVm]] | None = None,
+        standalone_vm_max_inventory: int = 5000,
         poll_interval_seconds: int = 300,
         lustre_poll_interval_seconds: int = 60,
         registry: CollectorRegistry | None = None,
@@ -94,6 +119,10 @@ class VmssMetricsExporter:
     ) -> None:
         self._collect_counts = collect_counts
         self._collect_lustre_metrics = collect_lustre_metrics
+        self._collect_standalone_vms = collect_standalone_vms
+        if standalone_vm_max_inventory <= 0:
+            raise ValueError("standalone_vm_max_inventory must be positive")
+        self._standalone_vm_max_inventory = standalone_vm_max_inventory
         self._poll_interval_seconds = poll_interval_seconds
         self._lustre_poll_interval_seconds = lustre_poll_interval_seconds
         self._leader_election_enabled = leader_election_enabled
@@ -132,6 +161,13 @@ class VmssMetricsExporter:
         self._active_lustre_filesystem_aggregate_labelsets: set[
             tuple[str, str, str, str]
         ] = set()
+        self._active_standalone_vm_info_labelsets: set[
+            tuple[str, str, str, str, str, str, str, str]
+        ] = set()
+        self._active_standalone_vm_power_state_labelsets: set[
+            tuple[str, str, str, str]
+        ] = set()
+        self._active_standalone_vm_size_labelsets: set[tuple[str]] = set()
 
         effective_registry = registry if registry is not None else REGISTRY
 
@@ -492,6 +528,62 @@ class VmssMetricsExporter:
         )
         self.is_leader.set(0.0 if leader_election_enabled else 1.0)
 
+        # ---- Standalone (non-VMSS) Azure VM inventory -----------------------
+        # ``azure_vm_info`` carries only stable identity labels; transient
+        # state (power) lives on the separate ``azure_vm_power_state`` gauge.
+        # This split keeps Prometheus from creating brand-new ``azure_vm_info``
+        # series every time a VM is started or stopped.
+        self.standalone_vm_info = Gauge(
+            "azure_vm_info",
+            (
+                "Static inventory of standalone (non-VMSS) Azure VMs discovered via "
+                "Azure Resource Graph. The value is always 1; join on "
+                "(subscription_id, resource_group, vm_name) to enrich runtime metrics."
+            ),
+            STANDALONE_VM_INFO_LABELS,
+            registry=effective_registry,
+        )
+        self.standalone_vm_power_state = Gauge(
+            "azure_vm_power_state",
+            (
+                "Current normalized power state for each standalone Azure VM. One "
+                "series per VM per state in {running, stopped, deallocated, starting, "
+                "stopping, unknown}; exactly one series per VM has value 1 at a time."
+            ),
+            STANDALONE_VM_POWER_STATE_LABELS,
+            registry=effective_registry,
+        )
+        self.standalone_vm_count_by_size = Gauge(
+            "azure_vm_count_by_size",
+            (
+                "Number of standalone (non-VMSS) Azure VMs aggregated by vm_size from "
+                "the latest Resource Graph collection. Always emitted, even when the "
+                "per-VM inventory metrics are suppressed by the cardinality guardrail."
+            ),
+            STANDALONE_VM_COUNT_BY_SIZE_LABELS,
+            registry=effective_registry,
+        )
+        self.standalone_vm_total = Gauge(
+            "azure_vm_exporter_vm_total",
+            "Number of standalone Azure VMs observed in the latest successful collection.",
+            registry=effective_registry,
+        )
+        self.standalone_vm_last_success_timestamp = Gauge(
+            "azure_vm_exporter_last_success_timestamp_seconds",
+            "Unix timestamp of the last successful standalone-VM inventory collection.",
+            registry=effective_registry,
+        )
+        self.standalone_vm_collection_duration = Gauge(
+            "azure_vm_exporter_collection_duration_seconds",
+            "Duration in seconds of the most recent standalone-VM inventory collection attempt.",
+            registry=effective_registry,
+        )
+        self.standalone_vm_collection_errors = Counter(
+            "azure_vm_exporter_collection_errors",
+            "Total standalone-VM inventory collection errors observed by this exporter process.",
+            registry=effective_registry,
+        )
+
     def collect_once(self) -> Sequence[VmssCount]:
         """Collect once and immediately update gauges."""
 
@@ -510,6 +602,12 @@ class VmssMetricsExporter:
         if self._collect_lustre_metrics is not None:
             with suppress(Exception):
                 self.collect_lustre_once()
+        if self._collect_standalone_vms is not None:
+            # Failures here must never break VMSS or Lustre exposition; the
+            # standalone-VM exporter has its own error counter so observability
+            # of the standalone path is preserved.
+            with suppress(Exception):
+                self.collect_standalone_vms_once()
         with self._metric_lock:
             if not self._can_write_metrics_locked():
                 LOGGER.info(
@@ -689,6 +787,9 @@ class VmssMetricsExporter:
                 self.lustre_filesystem_client_evictions,
                 self.lustre_metadata_amplification_ratio,
                 self.lustre_filesystem_sample_max_age,
+                self.standalone_vm_info,
+                self.standalone_vm_power_state,
+                self.standalone_vm_count_by_size,
             ):
                 gauge.clear()
             self._active_labelsets = set()
@@ -700,6 +801,9 @@ class VmssMetricsExporter:
             self._active_lustre_filesystem_info_labelsets = set()
             self._active_lustre_filesystem_capacity_labelsets = set()
             self._active_lustre_filesystem_aggregate_labelsets = set()
+            self._active_standalone_vm_info_labelsets = set()
+            self._active_standalone_vm_power_state_labelsets = set()
+            self._active_standalone_vm_size_labelsets = set()
             # Reset summary scalars so dashboards don't show stale totals on the follower.
             self.vmss_total.set(0)
             self.lustre_filesystem_total.set(0)
@@ -708,6 +812,9 @@ class VmssMetricsExporter:
             self.collection_duration.set(0)
             self.lustre_last_success_timestamp.set(0)
             self.lustre_collection_duration.set(0)
+            self.standalone_vm_total.set(0)
+            self.standalone_vm_last_success_timestamp.set(0)
+            self.standalone_vm_collection_duration.set(0)
 
     def _poll_vmss_forever(self) -> None:
         while not self._stop_event.is_set():
@@ -721,6 +828,13 @@ class VmssMetricsExporter:
             self._wake_event.clear()
             with suppress(Exception):
                 self._collect_vmss_once()
+            if self._collect_standalone_vms is not None:
+                # Standalone-VM collection lives on the VMSS poll cadence: both
+                # share the same Resource Graph client/throttling bucket and
+                # VM inventory rarely changes faster than the (default 5 min)
+                # VMSS poll interval.
+                with suppress(Exception):
+                    self.collect_standalone_vms_once()
             self._wake_event.wait(self._poll_interval_seconds)
 
     def _poll_lustre_forever(self) -> None:
@@ -802,6 +916,105 @@ class VmssMetricsExporter:
             self._active_info_labelsets = new_info_labelsets
             return True
 
+    def collect_standalone_vms_once(self) -> Sequence[StandaloneVm] | None:
+        """Collect standalone (non-VMSS) Azure VMs once and update inventory gauges.
+
+        Returns ``None`` when standalone-VM collection is disabled. Errors are
+        recorded on ``azure_vm_exporter_collection_errors_total`` and re-raised
+        so the calling site can decide whether to swallow them (the polling
+        loop and ``collect_once`` both wrap this call in ``with suppress``).
+        """
+
+        if self._collect_standalone_vms is None:
+            return None
+        start = time.monotonic()
+        try:
+            vms = tuple(self._collect_standalone_vms())
+        except Exception:  # noqa: BLE001 - keep exporter alive for transient Azure failures.
+            self.standalone_vm_collection_errors.inc()
+            self.standalone_vm_collection_duration.set(time.monotonic() - start)
+            LOGGER.exception("Standalone VM inventory collection failed")
+            raise
+
+        if not self._update_standalone_vm_metrics(vms):
+            LOGGER.info(
+                "Skipped standalone-VM metric update because leadership was lost mid-collection"
+            )
+            return vms
+        with self._metric_lock:
+            if not self._can_write_metrics_locked():
+                LOGGER.info(
+                    "Skipped standalone-VM collection summary update because leadership was "
+                    "lost mid-collection"
+                )
+                return vms
+            self.standalone_vm_total.set(len(vms))
+            self.standalone_vm_last_success_timestamp.set(time.time())
+            self.standalone_vm_collection_duration.set(time.monotonic() - start)
+        LOGGER.info("Collected inventory for %s standalone Azure VMs", len(vms))
+        return vms
+
+    def _update_standalone_vm_metrics(self, vms: Sequence[StandaloneVm]) -> bool:
+        # ``azure_vm_count_by_size`` is always emitted: it stays bounded by the
+        # number of distinct VM SKUs (~hundreds at most) regardless of how
+        # many VMs exist, so it is the dashboard-safe fallback when the
+        # per-VM inventory metrics are suppressed by the cardinality cap.
+        size_counts: dict[str, int] = {}
+        for vm in vms:
+            size_counts[vm.vm_size] = size_counts.get(vm.vm_size, 0) + 1
+        new_size_labelsets = {(size,) for size in size_counts}
+
+        suppress_per_vm = len(vms) > self._standalone_vm_max_inventory
+        if suppress_per_vm:
+            LOGGER.warning(
+                "Standalone-VM inventory of %s exceeds cap %s; suppressing per-VM "
+                "azure_vm_info and azure_vm_power_state series and emitting only "
+                "azure_vm_count_by_size aggregates.",
+                len(vms),
+                self._standalone_vm_max_inventory,
+            )
+            new_info_labelsets: set[tuple[str, str, str, str, str, str, str, str]] = set()
+            new_power_state_labelsets: set[tuple[str, str, str, str]] = set()
+        else:
+            new_info_labelsets = {vm.info_label_values for vm in vms}
+            new_power_state_labelsets = {
+                (*vm.identity_label_values, state)
+                for vm in vms
+                for state in STANDALONE_VM_POWER_STATES
+            }
+
+        with self._metric_lock:
+            if not self._can_write_metrics_locked():
+                return False
+
+            for stale in self._active_standalone_vm_info_labelsets - new_info_labelsets:
+                with suppress(KeyError):
+                    self.standalone_vm_info.remove(*stale)
+            for stale_state in (
+                self._active_standalone_vm_power_state_labelsets - new_power_state_labelsets
+            ):
+                with suppress(KeyError):
+                    self.standalone_vm_power_state.remove(*stale_state)
+            for stale_size in self._active_standalone_vm_size_labelsets - new_size_labelsets:
+                with suppress(KeyError):
+                    self.standalone_vm_count_by_size.remove(*stale_size)
+
+            for size, count in size_counts.items():
+                self.standalone_vm_count_by_size.labels(size).set(count)
+
+            if not suppress_per_vm:
+                for vm in vms:
+                    self.standalone_vm_info.labels(*vm.info_label_values).set(1)
+                    identity = vm.identity_label_values
+                    for state in STANDALONE_VM_POWER_STATES:
+                        value = 1.0 if state == vm.power_state else 0.0
+                        self.standalone_vm_power_state.labels(*identity, state).set(value)
+
+            self._active_standalone_vm_info_labelsets = new_info_labelsets
+            self._active_standalone_vm_power_state_labelsets = new_power_state_labelsets
+            self._active_standalone_vm_size_labelsets = new_size_labelsets
+            return True
+
     def _update_lustre_metrics(
         self,
         filesystems: Sequence[ManagedLustreFilesystem],
@@ -838,6 +1051,8 @@ class VmssMetricsExporter:
                 ):
                     with suppress(KeyError):
                         self.lustre_filesystem_info.remove(*stale)
+                    with suppress(KeyError):
+                        self.lustre_discovered_filesystem_info.remove(*stale)
                 for stale in (
                     self._active_lustre_filesystem_capacity_labelsets
                     - new_filesystem_capacity_labelsets

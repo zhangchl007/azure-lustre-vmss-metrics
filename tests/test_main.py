@@ -67,6 +67,26 @@ class _FakeLustreCollector:
         return ManagedLustreCollectionResult(metrics=(), filesystem_count=0)
 
 
+class _FakeStandaloneVmCollector:
+    instances: list[_FakeStandaloneVmCollector] = []
+
+    def __init__(
+        self,
+        resource_graph_client: object,
+        subscription_ids: object,
+        **kwargs: object,
+    ) -> None:
+        self.resource_graph_client = resource_graph_client
+        self.subscription_ids = subscription_ids
+        self.kwargs = kwargs
+        self.collect_calls = 0
+        self.instances.append(self)
+
+    def collect(self) -> list[object]:
+        self.collect_calls += 1
+        return []
+
+
 class _FakeExporterCallbacks:
     def __init__(self) -> None:
         self.calls: list[str] = []
@@ -94,6 +114,7 @@ def _install_common_main_fakes(monkeypatch) -> tuple[
 
     _FakeVmssCollector.instances = []
     _FakeLustreCollector.instances = []
+    _FakeStandaloneVmCollector.instances = []
 
     monkeypatch.setattr(
         main_module,
@@ -122,6 +143,11 @@ def _install_common_main_fakes(monkeypatch) -> tuple[
     )
     monkeypatch.setattr(main_module, "AzureResourceGraphVmssCollector", _FakeVmssCollector)
     monkeypatch.setattr(main_module, "AzureManagedLustreCollector", _FakeLustreCollector)
+    monkeypatch.setattr(
+        main_module,
+        "AzureResourceGraphStandaloneVmCollector",
+        _FakeStandaloneVmCollector,
+    )
 
     return (
         credential,

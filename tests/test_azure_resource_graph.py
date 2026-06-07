@@ -7,12 +7,17 @@ from dataclasses import dataclass
 import pytest
 
 from vmss_metrics_exporter.azure_resource_graph import (
+    STANDALONE_VMS_QUERY,
     VMSS_COUNTS_QUERY,
+    AzureResourceGraphStandaloneVmCollector,
     AzureResourceGraphVmssCollector,
+    _normalize_power_state,
     create_resource_graph_client,
+    normalize_standalone_vm_row,
     normalize_vmss_count_row,
     parse_vmss_parent_from_child_id,
     summarize_counts,
+    summarize_standalone_vms,
 )
 
 
@@ -243,3 +248,177 @@ def test_summarize_counts_contains_tabular_output() -> None:
     assert "sku_tier" in summary
     assert "vmss-a" in summary
     assert "Standard_DS2_v2" in summary
+
+
+# ---------------------------------------------------------------------------
+# Standalone (non-VMSS) VM inventory collector
+# ---------------------------------------------------------------------------
+
+
+class FakeStandaloneVmClient:
+    """Two-page Resource Graph stub for the standalone-VM collector tests."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def resources(self, query: object) -> FakeResponse:
+        self.calls += 1
+        if self.calls == 1:
+            return FakeResponse(
+                data=[
+                    {
+                        "subscriptionId": "sub-a",
+                        "resourceGroup": "rg-a",
+                        "vmName": "vm-1",
+                        "vmId": "id-1",
+                        "location": "eastus",
+                        "zone": "1",
+                        "vmSize": "Standard_D2s_v3",
+                        "osType": "Linux",
+                        "powerState": "VM running",
+                    },
+                ],
+                skip_token="page-2",
+            )
+        return FakeResponse(
+            data=[
+                {
+                    "subscriptionId": "sub-a",
+                    "resourceGroup": "rg-a",
+                    "vmName": "vm-2",
+                    "vmId": "id-2",
+                    "location": "eastus",
+                    "zone": "",
+                    "vmSize": "Standard_D4s_v5",
+                    "osType": "Windows",
+                    "powerState": "VM deallocated",
+                },
+            ],
+            skip_token=None,
+        )
+
+
+def test_standalone_vms_query_filters_out_vmss_members() -> None:
+    # The query MUST scope to standalone VMs only so the two metric families
+    # (azure_vmss_instance_count and azure_vm_info) are guaranteed disjoint.
+    lowered = STANDALONE_VMS_QUERY.lower()
+    assert "microsoft.compute/virtualmachines" in lowered
+    assert "isempty(tostring(properties.virtualmachinescaleset.id))" in lowered
+
+
+def test_normalize_standalone_vm_row_happy_path() -> None:
+    vm = normalize_standalone_vm_row(
+        {
+            "subscriptionId": "sub-a",
+            "resourceGroup": "rg-a",
+            "vmName": "vm-1",
+            "vmId": "vmid-1",
+            "location": "eastus",
+            "zone": "2",
+            "vmSize": "Standard_D2s_v3",
+            "osType": "Linux",
+            "powerState": "VM running",
+        }
+    )
+
+    assert vm.subscription_id == "sub-a"
+    assert vm.vm_name == "vm-1"
+    assert vm.vm_id == "vmid-1"
+    assert vm.zone == "2"
+    assert vm.power_state == "running"
+    assert vm.info_label_values == (
+        "sub-a",
+        "rg-a",
+        "vm-1",
+        "vmid-1",
+        "eastus",
+        "2",
+        "Standard_D2s_v3",
+        "Linux",
+    )
+    assert vm.identity_label_values == ("sub-a", "rg-a", "vm-1")
+
+
+def test_normalize_standalone_vm_row_defaults_for_optional_fields() -> None:
+    vm = normalize_standalone_vm_row(
+        {
+            "subscriptionId": "sub-a",
+            "resourceGroup": "rg-a",
+            "vmName": "vm-1",
+        }
+    )
+
+    # Missing zone stays empty (legitimate for non-zonal VMs); other optional
+    # fields fall back to the synthetic "unknown" sentinel.
+    assert vm.zone == ""
+    assert vm.vm_id == "unknown"
+    assert vm.location == "unknown"
+    assert vm.vm_size == "unknown"
+    assert vm.os_type == "unknown"
+    assert vm.power_state == "unknown"
+
+
+def test_normalize_standalone_vm_row_requires_identity_fields() -> None:
+    with pytest.raises(ValueError):
+        normalize_standalone_vm_row({"subscriptionId": "sub-a", "resourceGroup": "rg-a"})
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("VM running", "running"),
+        ("vm RUNNING", "running"),
+        ("VM stopped", "stopped"),
+        ("VM deallocated", "deallocated"),
+        ("VM starting", "starting"),
+        ("VM stopping", "stopping"),
+        ("VM deallocating", "stopping"),
+        ("PowerState/unknown", "unknown"),
+        ("", "unknown"),
+        (None, "unknown"),
+    ],
+)
+def test_normalize_power_state_mapping(raw: object, expected: str) -> None:
+    assert _normalize_power_state(raw) == expected
+
+
+def test_standalone_collector_pages_and_normalizes(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "vmss_metrics_exporter.azure_resource_graph.build_query_request",
+        lambda **kwargs: kwargs,
+    )
+    client = FakeStandaloneVmClient()
+    collector = AzureResourceGraphStandaloneVmCollector(
+        client, ["sub-a"], retry_base_delay_seconds=0
+    )
+
+    vms = collector.collect()
+
+    assert client.calls == 2
+    assert [vm.vm_name for vm in vms] == ["vm-1", "vm-2"]
+    assert vms[0].power_state == "running"
+    assert vms[1].power_state == "deallocated"
+    assert vms[1].zone == ""
+
+
+def test_summarize_standalone_vms_contains_tabular_output() -> None:
+    vm = normalize_standalone_vm_row(
+        {
+            "subscriptionId": "sub-a",
+            "resourceGroup": "rg-a",
+            "vmName": "vm-1",
+            "vmId": "vmid-1",
+            "location": "eastus",
+            "zone": "1",
+            "vmSize": "Standard_D2s_v3",
+            "osType": "Linux",
+            "powerState": "VM running",
+        }
+    )
+
+    summary = summarize_standalone_vms([vm])
+
+    assert "vm_name" in summary
+    assert "power_state" in summary
+    assert "vm-1" in summary
+    assert "running" in summary

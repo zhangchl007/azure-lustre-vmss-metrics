@@ -1,5 +1,35 @@
 # Release Notes
 
+## Unreleased - 2026-06-08
+
+### Overview
+
+Adds standalone (non-VMSS) Azure VM inventory to the exporter and the VMSS Grafana dashboard so operators can see the full Azure VM footprint (not just scale set members) without spinning up a second tool.
+
+### Highlights
+
+- New backend collector `AzureResourceGraphStandaloneVmCollector` discovers standalone Azure VMs via Resource Graph, reusing the existing `ResourceGraphClient` (shared credential, token cache, and throttling bucket).
+- New metrics:
+  - `azure_vm_info{subscription_id, resource_group, vm_name, vm_id, location, zone, vm_size, os_type}` — stable per-VM identity, value `1`.
+  - `azure_vm_power_state{subscription_id, resource_group, vm_name, state}` — one series per VM per normalized state in `{running, stopped, deallocated, starting, stopping, unknown}`; exactly one series per VM has value `1`. Splitting state off the info metric keeps Prometheus from creating brand-new series on every start/stop transition.
+  - `azure_vm_count_by_size{vm_size}` — bounded aggregate that always emits, even when per-VM series are suppressed by the cardinality guardrail.
+  - `azure_vm_exporter_vm_total`, `azure_vm_exporter_last_success_timestamp_seconds`, `azure_vm_exporter_collection_duration_seconds`, `azure_vm_exporter_collection_errors_total`.
+- New collapsible `Standalone VM inventory (non-VMSS)` row added to `deploy/grafana-dashboard-vmss.json` (panels: stat-strip by power state, total observed, table by `vm_size`, per-VM table joined with current state).
+- New alert rules in `deploy/vmss-alert-rules.yaml`:
+  - `AzureVmInventoryStale` — fires when the last successful inventory collection is older than 10 minutes.
+  - `AzureVmInventoryCollectionErrors` — fires when `azure_vm_exporter_collection_errors_total` is increasing.
+- Cardinality guardrail `STANDALONE_VM_MAX_INVENTORY` (default `5000`) suppresses per-VM `azure_vm_info` / `azure_vm_power_state` series above the threshold but keeps the bounded `azure_vm_count_by_size` aggregate and `azure_vm_exporter_vm_total` scalar.
+- New configuration:
+  - `ENABLE_STANDALONE_VM_INVENTORY` (default `true`)
+  - `STANDALONE_VM_MAX_INVENTORY` (default `5000`, range 100–100000)
+- Standalone-VM collection runs on the existing VMSS poll cadence and is isolated from VMSS / Managed Lustre via `with suppress(Exception)` plus a dedicated error counter, so a Resource Graph failure on the inventory query can never break the VMSS or Lustre exporters.
+
+### Notes
+
+- Worst-case per-VM series budget: `8` (info) + `6` (power_state) = `14` series per VM, plus one shared `azure_vm_count_by_size` series per distinct SKU.
+- Resolves issue [#11](https://github.com/zhangchl007/azure-lustre-vmss-metrics/issues/11).
+
+
 ## Unreleased - 2026-06-07
 
 ### Overview

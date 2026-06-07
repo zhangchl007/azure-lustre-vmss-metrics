@@ -55,7 +55,7 @@
       "gridPos": {"h": 4, "w": 4, "x": 0, "y": 1},
       "targets": [
         {
-          "expr": "max(azure_vmss_exporter_vmss_total{job=\"$job\"})",
+          "expr": "max(last_over_time(azure_vmss_exporter_vmss_total{job=\"$job\"}[10m]))",
           "legendFormat": "VMSS",
           "refId": "A"
         }
@@ -276,7 +276,7 @@
       "gridPos": {"h": 10, "w": 24, "x": 0, "y": 6},
       "targets": [
         {
-          "expr": "topk($top_n,\n  $rank_by by (subscription_id, resource_group, vmss_name, location, orchestration_mode) (\n    azure_vmss_instance_count{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", vmss_name=~\"$vmss_name\", location=~\"$location\"}\n  ) > 0\n)",
+          "expr": "topk($top_n,\n  $rank_by by (subscription_id, resource_group, vmss_name, location, orchestration_mode) (\n    last_over_time(azure_vmss_instance_count{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", vmss_name=~\"$vmss_name\", location=~\"$location\"}[10m])\n  ) > 0\n)",
           "legendFormat": "{{vmss_name}} · {{resource_group}}",
           "refId": "A"
         }
@@ -323,7 +323,7 @@
       "gridPos": {"h": 10, "w": 24, "x": 0, "y": 16},
       "targets": [
         {
-          "expr": "topk($top_n,\n  $rank_by by (subscription_id, resource_group, vmss_name, location, orchestration_mode) (\n    azure_vmss_instance_count{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", vmss_name=~\"$vmss_name\", location=~\"$location\"}\n  ) > 0\n)",
+          "expr": "topk($top_n,\n  $rank_by by (subscription_id, resource_group, vmss_name, location, orchestration_mode) (\n    last_over_time(azure_vmss_instance_count{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", vmss_name=~\"$vmss_name\", location=~\"$location\"}[10m])\n  ) > 0\n)",
           "legendFormat": "{{vmss_name}} · {{resource_group}}",
           "refId": "A"
         }
@@ -783,6 +783,222 @@
             },
             "tooltip": {"mode": "multi", "sort": "desc"}
           }
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "id": 105,
+      "title": "Standalone VM inventory (non-VMSS)",
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 68},
+      "collapsed": true,
+      "panels": [
+        {
+          "type": "stat",
+          "id": 200,
+          "title": "Standalone VMs observed",
+          "description": "Total number of standalone (non-VMSS) Azure VMs returned by the latest successful Resource Graph collection. Filtered by the selected subscription, resource group, and location.",
+          "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+          "gridPos": {"h": 4, "w": 6, "x": 0, "y": 69},
+          "targets": [
+            {
+              "expr": "sum(azure_vm_info{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", location=~\"$location\"})",
+              "instant": true,
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "decimals": 0,
+              "color": {"mode": "thresholds"},
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {"color": "blue", "value": null}
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false},
+            "colorMode": "value",
+            "graphMode": "none",
+            "textMode": "auto"
+          },
+          "pluginVersion": "10.4.0"
+        },
+        {
+          "type": "stat",
+          "id": 201,
+          "title": "Standalone VMs by power state",
+          "description": "Live count of standalone VMs in each normalized power state from azure_vm_power_state. Exactly one state series per VM is 1 at a time, so summing keeps totals consistent with 'Standalone VMs observed'.",
+          "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+          "gridPos": {"h": 4, "w": 18, "x": 6, "y": 69},
+          "targets": [
+            {
+              "expr": "sum by (state) (\n  (azure_vm_power_state{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\"} == 1)\n  * on (subscription_id, resource_group, vm_name) group_left ()\n  azure_vm_info{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", location=~\"$location\"}\n)",
+              "instant": true,
+              "legendFormat": "{{state}}",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "decimals": 0,
+              "color": {"mode": "palette-classic"}
+            },
+            "overrides": [
+              {
+                "matcher": {"id": "byName", "options": "running"},
+                "properties": [{"id": "color", "value": {"mode": "fixed", "fixedColor": "green"}}]
+              },
+              {
+                "matcher": {"id": "byName", "options": "stopped"},
+                "properties": [{"id": "color", "value": {"mode": "fixed", "fixedColor": "orange"}}]
+              },
+              {
+                "matcher": {"id": "byName", "options": "deallocated"},
+                "properties": [{"id": "color", "value": {"mode": "fixed", "fixedColor": "blue"}}]
+              },
+              {
+                "matcher": {"id": "byName", "options": "unknown"},
+                "properties": [{"id": "color", "value": {"mode": "fixed", "fixedColor": "red"}}]
+              }
+            ]
+          },
+          "options": {
+            "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false},
+            "colorMode": "value",
+            "graphMode": "none",
+            "textMode": "value_and_name",
+            "orientation": "horizontal"
+          },
+          "pluginVersion": "10.4.0"
+        },
+        {
+          "type": "table",
+          "id": 202,
+          "title": "Standalone VMs by size",
+          "description": "Count of standalone VMs grouped by Azure vm_size, filtered by subscription, resource group, and location. Note: azure_vm_count_by_size is always emitted even when per-VM series are suppressed by the cardinality guardrail, so this panel keeps working at high inventory.",
+          "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+          "gridPos": {"h": 10, "w": 12, "x": 0, "y": 73},
+          "targets": [
+            {
+              "expr": "sum by (vm_size) (\n  azure_vm_info{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", location=~\"$location\"}\n)",
+              "format": "table",
+              "instant": true,
+              "refId": "A"
+            }
+          ],
+          "transformations": [
+            {
+              "id": "organize",
+              "options": {
+                "excludeByName": {"Time": true},
+                "indexByName": {"vm_size": 0, "Value": 1},
+                "renameByName": {"Value": "vm_count"}
+              }
+            },
+            {
+              "id": "sortBy",
+              "options": {"fields": {}, "sort": [{"field": "vm_count", "desc": true}]}
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "custom": {"align": "left", "displayMode": "auto"},
+              "unit": "short",
+              "decimals": 0
+            },
+            "overrides": [
+              {
+                "matcher": {"id": "byName", "options": "vm_count"},
+                "properties": [
+                  {"id": "custom.cellOptions", "value": {"type": "color-background"}},
+                  {"id": "color", "value": {"mode": "continuous-BlPu"}},
+                  {"id": "custom.align", "value": "right"}
+                ]
+              }
+            ]
+          },
+          "options": {
+            "showHeader": true,
+            "cellHeight": "sm",
+            "sortBy": [{"displayName": "vm_count", "desc": true}]
+          },
+          "pluginVersion": "10.4.0"
+        },
+        {
+          "type": "table",
+          "id": 203,
+          "title": "Standalone VMs (detail)",
+          "description": "Per-VM inventory joined with current power state. Suppressed when the standalone-VM count exceeds STANDALONE_VM_MAX_INVENTORY (default 5000).",
+          "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+          "gridPos": {"h": 10, "w": 12, "x": 12, "y": 73},
+          "targets": [
+            {
+              "expr": "azure_vm_info{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", location=~\"$location\"}\n  * on (subscription_id, resource_group, vm_name) group_left(state)\n  (azure_vm_power_state{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\"} == 1)",
+              "format": "table",
+              "instant": true,
+              "refId": "A"
+            }
+          ],
+          "transformations": [
+            {
+              "id": "organize",
+              "options": {
+                "excludeByName": {"Time": true, "Value": true, "job": true, "instance": true, "__name__": true},
+                "indexByName": {
+                  "subscription_id": 0,
+                  "resource_group": 1,
+                  "vm_name": 2,
+                  "vm_size": 3,
+                  "state": 4,
+                  "location": 5,
+                  "zone": 6,
+                  "os_type": 7,
+                  "vm_id": 8
+                }
+              }
+            },
+            {
+              "id": "sortBy",
+              "options": {"fields": {}, "sort": [{"field": "vm_name", "desc": false}]}
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "custom": {"align": "left", "displayMode": "auto"}
+            },
+            "overrides": [
+              {
+                "matcher": {"id": "byName", "options": "state"},
+                "properties": [
+                  {"id": "custom.cellOptions", "value": {"type": "color-text"}},
+                  {
+                    "id": "mappings",
+                    "value": [
+                      {"type": "value", "options": {"running": {"color": "green", "index": 0}}},
+                      {"type": "value", "options": {"stopped": {"color": "orange", "index": 1}}},
+                      {"type": "value", "options": {"deallocated": {"color": "blue", "index": 2}}},
+                      {"type": "value", "options": {"starting": {"color": "yellow", "index": 3}}},
+                      {"type": "value", "options": {"stopping": {"color": "yellow", "index": 4}}},
+                      {"type": "value", "options": {"unknown": {"color": "red", "index": 5}}}
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          "options": {
+            "showHeader": true,
+            "cellHeight": "sm",
+            "sortBy": [{"displayName": "vm_name", "desc": false}]
+          },
+          "pluginVersion": "10.4.0"
         }
       ]
     }

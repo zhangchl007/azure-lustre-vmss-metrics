@@ -9,7 +9,7 @@ import time
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Any, Protocol
 
-from .models import VmssCount
+from .models import STANDALONE_VM_POWER_STATES, StandaloneVm, VmssCount
 
 LOGGER = logging.getLogger(__name__)
 
@@ -71,6 +71,45 @@ _VMSS_CHILD_ID_PATTERN = re.compile(
 )
 
 
+# Resource Graph query for *standalone* Azure VMs only. The
+# ``properties.virtualMachineScaleSet.id`` filter excludes any VM that is a
+# member of a VMSS (those are already covered by ``VMSS_COUNTS_QUERY``), so the
+# two result sets are disjoint and the ``azure_vm_*`` metrics never double-count
+# against ``azure_vmss_instance_count``. Azure Arc / hybrid machines live under
+# ``microsoft.hybridcompute/machines`` and are intentionally out of scope.
+STANDALONE_VMS_QUERY = """
+Resources
+| where type =~ 'microsoft.compute/virtualmachines'
+| where isempty(tostring(properties.virtualMachineScaleSet.id))
+| project
+    subscriptionId,
+    resourceGroup,
+    vmName       = name,
+    vmId         = tostring(properties.vmId),
+    location,
+    zone         = tostring(zones[0]),
+    vmSize       = tostring(properties.hardwareProfile.vmSize),
+    osType       = tostring(properties.storageProfile.osDisk.osType),
+    powerState   = tostring(properties.extended.instanceView.powerState.displayStatus)
+| order by subscriptionId asc, resourceGroup asc, vmName asc
+""".strip()
+
+
+# Map raw Azure Resource Graph ``displayStatus`` strings to the bounded enum
+# emitted on the ``state`` label of ``azure_vm_power_state``. ARG returns
+# human-readable strings like "VM running" / "VM deallocated"; normalizing in
+# the collector lets us guarantee a fixed label set even if Azure adds new
+# transitional states later (they fall through to ``unknown``).
+_POWER_STATE_MAPPING: dict[str, str] = {
+    "vm running": "running",
+    "vm stopped": "stopped",
+    "vm deallocated": "deallocated",
+    "vm starting": "starting",
+    "vm stopping": "stopping",
+    "vm deallocating": "stopping",
+}
+
+
 class ResourceGraphClientProtocol(Protocol):
     """Protocol for the subset of ResourceGraphClient used by this exporter."""
 
@@ -78,8 +117,14 @@ class ResourceGraphClientProtocol(Protocol):
         """Execute a Resource Graph query request."""
 
 
-class AzureResourceGraphVmssCollector:
-    """Collect VMSS counts from Azure Resource Graph."""
+class _ResourceGraphPagedCollector:
+    """Shared paging + retry behavior for Resource Graph KQL collectors.
+
+    Subclasses implement :meth:`collect` and call :meth:`_run_paged_query` with
+    their own KQL. Extracting this base class avoids duplicating ~40 lines of
+    paging / backoff code between the VMSS and standalone-VM collectors and
+    keeps retry behavior consistent.
+    """
 
     def __init__(
         self,
@@ -97,12 +142,6 @@ class AzureResourceGraphVmssCollector:
         self._page_size = page_size
         self._max_retries = max_retries
         self._retry_base_delay_seconds = retry_base_delay_seconds
-
-    def collect(self) -> list[VmssCount]:
-        """Return normalized VMSS counts for all configured subscriptions."""
-
-        rows = self._run_paged_query(VMSS_COUNTS_QUERY)
-        return [normalize_vmss_count_row(row) for row in rows]
 
     def _run_paged_query(self, query: str) -> list[Mapping[str, Any]]:
         all_rows: list[Mapping[str, Any]] = []
@@ -151,6 +190,26 @@ class AzureResourceGraphVmssCollector:
         )
         jitter = random.uniform(0, self._retry_base_delay_seconds)
         return backoff + jitter
+
+
+class AzureResourceGraphVmssCollector(_ResourceGraphPagedCollector):
+    """Collect VMSS counts from Azure Resource Graph."""
+
+    def collect(self) -> list[VmssCount]:
+        """Return normalized VMSS counts for all configured subscriptions."""
+
+        rows = self._run_paged_query(VMSS_COUNTS_QUERY)
+        return [normalize_vmss_count_row(row) for row in rows]
+
+
+class AzureResourceGraphStandaloneVmCollector(_ResourceGraphPagedCollector):
+    """Collect standalone (non-VMSS) Azure VM inventory from Resource Graph."""
+
+    def collect(self) -> list[StandaloneVm]:
+        """Return normalized standalone-VM inventory for all configured subscriptions."""
+
+        rows = self._run_paged_query(STANDALONE_VMS_QUERY)
+        return [normalize_standalone_vm_row(row) for row in rows]
 
 
 def _is_retryable_exception(exc: Exception) -> bool:
@@ -243,6 +302,36 @@ def normalize_vmss_count_row(row: Mapping[str, Any]) -> VmssCount:
     )
 
 
+def normalize_standalone_vm_row(row: Mapping[str, Any]) -> StandaloneVm:
+    """Normalize one Resource Graph row into a stable `StandaloneVm` model."""
+
+    return StandaloneVm(
+        subscription_id=_required_str(row, "subscriptionId"),
+        resource_group=_required_str(row, "resourceGroup"),
+        vm_name=_required_str(row, "vmName"),
+        vm_id=_optional_str(row, "vmId", default="unknown"),
+        location=_optional_str(row, "location", default="unknown"),
+        # ``zone`` legitimately can be empty for non-zonal VMs; preserve that as
+        # an empty string rather than the synthetic ``"unknown"`` sentinel so a
+        # missing zone is distinguishable from an unparseable one in dashboards.
+        zone=_optional_str(row, "zone", default=""),
+        vm_size=_optional_str(row, "vmSize", default="unknown"),
+        os_type=_optional_str(row, "osType", default="unknown"),
+        power_state=_normalize_power_state(row.get("powerState")),
+    )
+
+
+def _normalize_power_state(value: Any) -> str:
+    """Return the bounded ``state`` label for ``azure_vm_power_state``."""
+
+    if value is None:
+        return "unknown"
+    text = str(value).strip().lower()
+    if not text:
+        return "unknown"
+    return _POWER_STATE_MAPPING.get(text, "unknown")
+
+
 def parse_vmss_parent_from_child_id(resource_id: str) -> tuple[str, str, str]:
     """Return `(subscription_id, resource_group, vmss_name)` from a VMSS VM resource ID."""
 
@@ -299,3 +388,45 @@ def summarize_counts(counts: Iterable[VmssCount]) -> str:
             )
         )
     return "\n".join(lines)
+
+
+def summarize_standalone_vms(vms: Iterable[StandaloneVm]) -> str:
+    """Create a compact human-readable summary for one-shot runs."""
+
+    lines = [
+        "subscription_id\tresource_group\tvm_name\tlocation\tzone\tvm_size\tos_type\tpower_state"
+    ]
+    for item in vms:
+        lines.append(
+            "\t".join(
+                [
+                    item.subscription_id,
+                    item.resource_group,
+                    item.vm_name,
+                    item.location,
+                    item.zone,
+                    item.vm_size,
+                    item.os_type,
+                    item.power_state,
+                ]
+            )
+        )
+    return "\n".join(lines)
+
+
+# Re-export bounded state set for callers that need to pre-seed gauges.
+__all__ = [
+    "STANDALONE_VMS_QUERY",
+    "STANDALONE_VM_POWER_STATES",
+    "VMSS_COUNTS_QUERY",
+    "AzureResourceGraphStandaloneVmCollector",
+    "AzureResourceGraphVmssCollector",
+    "ResourceGraphClientProtocol",
+    "build_query_request",
+    "create_resource_graph_client",
+    "normalize_standalone_vm_row",
+    "normalize_vmss_count_row",
+    "parse_vmss_parent_from_child_id",
+    "summarize_counts",
+    "summarize_standalone_vms",
+]
