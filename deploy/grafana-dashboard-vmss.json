@@ -271,9 +271,9 @@
       "type": "timeseries",
       "id": 7,
       "title": "Top VMSS instance count",
-      "description": "TRUE line chart: Y axis = actual VM instance count, NOT stacked. Each VMSS is one colored line. To stay readable at scale, only the top $top_n VMSS ranked by $rank_by are drawn — adjust the variables at the top of the dashboard to expand or narrow the view. Use $resource_group / $vmss_name to drill down further. Two VMSS with identical instance counts overlap at the same Y position by design (this is the truth — they share the same value); use the legend table on the right and the State Timeline panel beside this one to disambiguate.",
+      "description": "Trend lines for actual VM instance count. Each VMSS has a distinct color in the legend, with points always shown to make brief scale changes easier to spot. If multiple VMSS have the exact same count at the same time, their lines overlap by definition; use the legend/tooltip or filter to a VMSS/resource group to inspect individual series.",
       "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-      "gridPos": {"h": 10, "w": 24, "x": 0, "y": 6},
+      "gridPos": {"h": 14, "w": 24, "x": 0, "y": 6},
       "targets": [
         {
           "expr": "topk($top_n,\n  $rank_by by (subscription_id, resource_group, vmss_name, location, orchestration_mode) (\n    last_over_time(azure_vmss_instance_count{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", vmss_name=~\"$vmss_name\", location=~\"$location\"}[10m])\n  ) > 0\n)",
@@ -289,13 +289,15 @@
             "lineWidth": 3,
             "fillOpacity": 0,
             "showPoints": "always",
-            "pointSize": 8,
+            "pointSize": 5,
             "spanNulls": true,
             "stacking": {"mode": "none", "group": "A"},
             "axisPlacement": "auto",
             "axisLabel": "instances",
             "axisSoftMin": 0,
-            "scaleDistribution": {"type": "linear"}
+            "scaleDistribution": {"type": "linear"},
+            "axisCenteredZero": false,
+            "axisColorMode": "text"
           },
           "color": {"mode": "palette-classic"},
           "unit": "short",
@@ -305,69 +307,21 @@
         "overrides": []
       },
       "options": {
+        "graph": {"mode": "area"},
         "legend": {
           "displayMode": "table",
           "placement": "right",
           "showLegend": true,
-          "calcs": ["lastNotNull", "min", "max", "mean"]
+          "calcs": ["lastNotNull", "min", "max"]
         },
         "tooltip": {"mode": "multi", "sort": "desc"}
-      }
-    },
-    {
-      "type": "state-timeline",
-      "id": 13,
-      "title": "Top VMSS timeline",
-      "description": "One horizontal row per VMSS — no geometric overlap is possible even when many VMSS share the same instance count. Limited to top $top_n by $rank_by to remain legible at high cardinality. Color encodes instance count.",
-      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-      "gridPos": {"h": 10, "w": 24, "x": 0, "y": 16},
-      "targets": [
-        {
-          "expr": "topk($top_n,\n  $rank_by by (subscription_id, resource_group, vmss_name, location, orchestration_mode) (\n    last_over_time(azure_vmss_instance_count{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", vmss_name=~\"$vmss_name\", location=~\"$location\"}[10m])\n  ) > 0\n)",
-          "legendFormat": "{{vmss_name}} · {{resource_group}}",
-          "refId": "A"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "color": {"mode": "thresholds"},
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {"color": "transparent", "value": null},
-              {"color": "blue", "value": 1},
-              {"color": "green", "value": 2},
-              {"color": "yellow", "value": 4},
-              {"color": "orange", "value": 8},
-              {"color": "red", "value": 16}
-            ]
-          },
-          "custom": {
-            "lineWidth": 0,
-            "fillOpacity": 80
-          },
-          "mappings": []
-        },
-        "overrides": []
-      },
-      "options": {
-        "mergeValues": true,
-        "showValue": "auto",
-        "alignValue": "left",
-        "rowHeight": 0.9,
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": false
-        },
-        "tooltip": {"mode": "single", "sort": "none"}
       }
     },
     {
       "type": "row",
       "id": 104,
       "title": "Aggregations & Distribution",
-      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 26},
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 20},
       "collapsed": false,
       "panels": []
     },
@@ -377,7 +331,7 @@
       "title": "Instance-count distribution",
       "description": "Heatmap density view that scales to 100s/1000s of VMSS without any top-N filter. X = time, Y = instance count value, color intensity = number of VMSS that have that instance count at that time. Use this to see overall fleet behaviour (e.g. how many VMSS are idle at 0, how many running with 1\u20133, etc.) regardless of cardinality. The trend chart above only shows top $top_n series; this heatmap shows ALL.",
       "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-      "gridPos": {"h": 8, "w": 14, "x": 0, "y": 27},
+      "gridPos": {"h": 8, "w": 14, "x": 0, "y": 21},
       "targets": [
         {
           "expr": "max by (subscription_id, resource_group, vmss_name, location, orchestration_mode) (\n  azure_vmss_instance_count{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", vmss_name=~\"$vmss_name\", location=~\"$location\"}\n)",
@@ -432,7 +386,7 @@
       "title": "Instances by resource group",
       "description": "Stacked area chart of total VM instances summed per resource group. Provides a low-cardinality rollup view that stays readable even when the underlying fleet has hundreds of VMSS. Only the top $top_n resource groups by current total instances are shown.",
       "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-      "gridPos": {"h": 8, "w": 10, "x": 14, "y": 27},
+      "gridPos": {"h": 8, "w": 10, "x": 14, "y": 21},
       "targets": [
         {
           "expr": "topk($top_n,\n  sum by (resource_group) (\n    max by (subscription_id, resource_group, vmss_name, location, orchestration_mode) (\n      azure_vmss_instance_count{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", vmss_name=~\"$vmss_name\", location=~\"$location\"}\n    )\n  )\n)",
@@ -474,7 +428,7 @@
       "title": "Total instances by subscription",
       "description": "Aggregate VM instances per Azure subscription.",
       "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 35},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 29},
       "targets": [
         {
           "expr": "sum by (subscription_id) (\n  max by (subscription_id, resource_group, vmss_name, location, orchestration_mode) (\n    azure_vmss_instance_count{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", vmss_name=~\"$vmss_name\", location=~\"$location\"}\n  )\n)",
@@ -511,7 +465,7 @@
       "title": "Total instances by location",
       "description": "Aggregate VM instances per Azure region.",
       "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 35},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 29},
       "targets": [
         {
           "expr": "sum by (location) (\n  max by (subscription_id, resource_group, vmss_name, location, orchestration_mode) (\n    azure_vmss_instance_count{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", vmss_name=~\"$vmss_name\", location=~\"$location\"}\n  )\n)",
@@ -546,7 +500,7 @@
       "type": "row",
       "id": 102,
       "title": "Current snapshot",
-      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 43},
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 37},
       "collapsed": false,
       "panels": []
     },
@@ -556,7 +510,7 @@
       "title": "Current instance count by VMSS",
       "description": "Most recent observed VM instance count, sorted descending. Labels include resource group so VMSS with identical names across clusters are not collapsed.",
       "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-      "gridPos": {"h": 12, "w": 8, "x": 0, "y": 44},
+      "gridPos": {"h": 12, "w": 8, "x": 0, "y": 38},
       "targets": [
         {
           "expr": "sort_desc(\n  max by (subscription_id, resource_group, vmss_name, location, orchestration_mode) (\n    azure_vmss_instance_count{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", vmss_name=~\"$vmss_name\", location=~\"$location\"}\n  )\n)",
@@ -597,7 +551,7 @@
       "title": "Top 5 VM sizes by instances",
       "description": "Top VM sizes ranked by current observed VMSS instance count. This highlights the SKU families consuming the most VMSS instances in the selected scope.",
       "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-      "gridPos": {"h": 12, "w": 6, "x": 8, "y": 44},
+      "gridPos": {"h": 12, "w": 6, "x": 8, "y": 38},
       "targets": [
         {
           "expr": "topk(5,\n  sum by (vm_size) (\n    max by (subscription_id, resource_group, vmss_name, location, orchestration_mode) (\n      azure_vmss_instance_count{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", vmss_name=~\"$vmss_name\", location=~\"$location\"}\n    )\n    * on (subscription_id, resource_group, vmss_name, location, orchestration_mode) group_left(vm_size)\n    max by (subscription_id, resource_group, vmss_name, location, orchestration_mode, vm_size) (\n      azure_vmss_info{job=\"$job\"}\n    )\n  )\n)",
@@ -630,7 +584,7 @@
       "title": "VMSS inventory (latest)",
       "description": "Current VMSS view with VM size, desired capacity, actual instances, and drift. Sorted by current instance count descending so the largest VMSS appear first.",
       "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-      "gridPos": {"h": 12, "w": 10, "x": 14, "y": 44},
+      "gridPos": {"h": 12, "w": 10, "x": 14, "y": 38},
       "targets": [
         {
           "expr": "max by (subscription_id, resource_group, vmss_name, location, orchestration_mode) (\n  azure_vmss_instance_count{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", vmss_name=~\"$vmss_name\", location=~\"$location\"}\n)\n* on (subscription_id, resource_group, vmss_name, location, orchestration_mode) group_left(vm_size)\nmax by (subscription_id, resource_group, vmss_name, location, orchestration_mode, vm_size) (\n  azure_vmss_info{job=\"$job\"}\n)",
@@ -760,7 +714,7 @@
       "type": "row",
       "id": 105,
       "title": "Standalone VM inventory (non-VMSS)",
-      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 68},
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 62},
       "collapsed": true,
       "panels": [
         {
@@ -769,7 +723,7 @@
           "title": "Standalone VMs observed",
           "description": "Total number of standalone (non-VMSS) Azure VMs returned by the latest successful Resource Graph collection. Filtered by the selected subscription, resource group, and location.",
           "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-          "gridPos": {"h": 4, "w": 6, "x": 0, "y": 69},
+          "gridPos": {"h": 4, "w": 6, "x": 0, "y": 63},
           "targets": [
             {
               "expr": "sum(azure_vm_info{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", location=~\"$location\"})",
@@ -805,7 +759,7 @@
           "title": "Standalone VMs by power state",
           "description": "Live count of standalone VMs in each normalized power state from azure_vm_power_state. Exactly one state series per VM is 1 at a time, so summing keeps totals consistent with 'Standalone VMs observed'.",
           "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-          "gridPos": {"h": 4, "w": 18, "x": 6, "y": 69},
+          "gridPos": {"h": 4, "w": 18, "x": 6, "y": 63},
           "targets": [
             {
               "expr": "sum by (state) (\n  (azure_vm_power_state{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\"} == 1)\n  * on (subscription_id, resource_group, vm_name) group_left ()\n  azure_vm_info{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", location=~\"$location\"}\n)",
@@ -854,7 +808,7 @@
           "title": "Standalone VMs by size",
           "description": "Count of standalone VMs grouped by Azure vm_size, filtered by subscription, resource group, and location. Note: azure_vm_count_by_size is always emitted even when per-VM series are suppressed by the cardinality guardrail, so this panel keeps working at high inventory.",
           "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-          "gridPos": {"h": 10, "w": 12, "x": 0, "y": 73},
+          "gridPos": {"h": 10, "w": 12, "x": 0, "y": 67},
           "targets": [
             {
               "expr": "sum by (vm_size) (\n  azure_vm_info{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", location=~\"$location\"}\n)",
@@ -907,7 +861,7 @@
           "title": "Standalone VMs (detail)",
           "description": "Per-VM inventory joined with current power state. Suppressed when the standalone-VM count exceeds STANDALONE_VM_MAX_INVENTORY (default 5000).",
           "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-          "gridPos": {"h": 10, "w": 12, "x": 12, "y": 73},
+          "gridPos": {"h": 10, "w": 12, "x": 12, "y": 67},
           "targets": [
             {
               "expr": "azure_vm_info{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", location=~\"$location\"}\n  * on (subscription_id, resource_group, vm_name) group_left(state)\n  (azure_vm_power_state{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\"} == 1)",
