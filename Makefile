@@ -12,6 +12,7 @@ KUBE_MANIFEST ?= deploy/kubernetes.yaml
 PYTHON ?= python
 DOCKER ?= docker
 DOCKER_BUILD_ARGS ?=
+DOCKER_PLATFORMS ?= linux/amd64,linux/arm64
 KUBECTL ?= kubectl
 
 .PHONY: help
@@ -48,6 +49,10 @@ image: check-docker ## Build the container image.
 .PHONY: image-no-cache
 image-no-cache: check-docker ## Build the container image without Docker cache.
 	$(DOCKER) build --no-cache $(DOCKER_BUILD_ARGS) -t $(IMAGE_REF) .
+
+.PHONY: image-multiarch
+image-multiarch: check-docker ## Build and push a multi-arch image (linux/amd64,linux/arm64 by default).
+	$(DOCKER) buildx build --platform $(DOCKER_PLATFORMS) $(DOCKER_BUILD_ARGS) -t $(IMAGE_REF) --push .
 
 .PHONY: push
 push: check-docker ## Push the container image.

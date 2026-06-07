@@ -232,6 +232,37 @@ groups:
           summary: "Azure Managed Lustre MDT metric sample is stale"
           description: "{{ $labels.filesystem_name }} MDT {{ $labels.mdtnum }} has no fresh Azure Monitor MDT sample for more than 5 minutes. Check exporter logs and Azure Monitor health for this filesystem."
 
+      - alert: AzureManagedLustreFilesystemSampleStale
+        expr: azure_managed_lustre_filesystem_sample_max_age_seconds > 300
+        for: 2m
+        labels:
+          severity: warning
+          service: azure-managed-lustre
+        annotations:
+          summary: "Azure Managed Lustre filesystem telemetry is stale"
+          description: "{{ $labels.filesystem_name }} in {{ $labels.resource_group }} has at least one stale Azure Monitor OST/MDT sample older than 5 minutes. Current oldest sample age: {{ printf \"%.0f\" $value }} seconds."
+
+      # ---- AV metadata-heavy workload signal ------------------------
+      - alert: AzureManagedLustreMetadataAmplificationHigh
+        expr: azure_managed_lustre_metadata_amplification_ratio > 10
+        for: 10m
+        labels:
+          severity: warning
+          service: azure-managed-lustre
+        annotations:
+          summary: "Azure Managed Lustre metadata amplification is high"
+          description: "{{ $labels.filesystem_name }} in {{ $labels.resource_group }} has metadata ops more than 10x client data ops for 10 minutes. Current ratio: {{ printf \"%.3f\" $value }}. Investigate directory scans, stat/open storms, tiny-file phases, or AV dataset discovery jobs."
+
+      - alert: AzureManagedLustreMetadataAmplificationCritical
+        expr: azure_managed_lustre_metadata_amplification_ratio > 100
+        for: 5m
+        labels:
+          severity: critical
+          service: azure-managed-lustre
+        annotations:
+          summary: "Azure Managed Lustre metadata amplification is critical"
+          description: "{{ $labels.filesystem_name }} in {{ $labels.resource_group }} has metadata ops more than 100x client data ops for 5 minutes. Current ratio: {{ printf \"%.3f\" $value }}. Expect metadata-bound workload behavior; correlate with MDT latency, connected clients, and client evictions."
+
       # ---- Exporter leader loss — collection paused -----------------
       # Only meaningful when leader election is enabled (LEADER_ELECTION_ENABLED=true).
       # When leader election is disabled azure_vmss_exporter_is_leader is always 1.

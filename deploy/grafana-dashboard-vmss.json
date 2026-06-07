@@ -190,7 +190,7 @@
       "gridPos": {"h": 4, "w": 4, "x": 16, "y": 1},
       "targets": [
         {
-          "expr": "time() - max(azure_vmss_exporter_last_success_timestamp_seconds{job=\"$job\"})",
+          "expr": "time() - max(azure_vmss_exporter_last_success_timestamp_seconds{job=\"$job\"} > 0)",
           "legendFormat": "age",
           "refId": "A"
         }

@@ -13,6 +13,10 @@ from .models import VmssCount
 
 LOGGER = logging.getLogger(__name__)
 
+# Upper bound on the exponential backoff term so a high retry count or large
+# base delay cannot produce multi-minute sleeps that stall the collection loop.
+_MAX_RETRY_BACKOFF_SECONDS = 30.0
+
 VMSS_COUNTS_QUERY = """
 Resources
 | where type =~ 'microsoft.compute/virtualmachinescalesets'
@@ -141,8 +145,12 @@ class AzureResourceGraphVmssCollector:
                 attempt += 1
 
     def _retry_delay(self, attempt: int) -> float:
+        backoff = min(
+            self._retry_base_delay_seconds * (2**attempt),
+            _MAX_RETRY_BACKOFF_SECONDS,
+        )
         jitter = random.uniform(0, self._retry_base_delay_seconds)
-        return (self._retry_base_delay_seconds * (2**attempt)) + jitter
+        return backoff + jitter
 
 
 def _is_retryable_exception(exc: Exception) -> bool:

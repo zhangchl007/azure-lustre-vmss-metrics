@@ -32,6 +32,7 @@ The exporter discovers resources with Azure Resource Graph, reads Managed Lustre
 
 | Metric | Description |
 | --- | --- |
+| `azure_managed_lustre_discovered_filesystem_info` | Table-friendly identity metadata for each discovered Managed Lustre filesystem. Labels: `subscription_id`, `resource_group`, `filesystem_name`, `location`, and `sku_tier`. Value is always `1`. |
 | `azure_managed_lustre_filesystem_info` | Metadata for each discovered Managed Lustre filesystem. Value is always `1`. |
 | `azure_managed_lustre_filesystem_storage_capacity_tib` | Configured filesystem capacity in TiB. |
 | `azure_managed_lustre_filesystem_total` | Number of Managed Lustre filesystems discovered. |
@@ -49,8 +50,11 @@ The exporter discovers resources with Azure Resource Graph, reads Managed Lustre
 | `azure_managed_lustre_client_read_throughput_bytes_per_second` | Client read throughput. |
 | `azure_managed_lustre_client_write_ops` | Client write operations. |
 | `azure_managed_lustre_client_write_throughput_bytes_per_second` | Client write throughput. |
+| `azure_managed_lustre_ost_connected_clients` | OST connected client count / exports (`OSTConnectedClients`). Approximates clients seen by each OST; per-OST variance flags failover or eviction. |
+| `azure_managed_lustre_ost_sample_timestamp_seconds` | Azure Monitor sample timestamp for each OST metric series. |
 | `azure_managed_lustre_ost_client_latency_milliseconds` | OST client latency. |
 | `azure_managed_lustre_ost_client_ops` | OST client operations. |
+| `azure_managed_lustre_ost_operation_sample_timestamp_seconds` | Azure Monitor sample timestamp for each OST operation metric series. |
 | `azure_managed_lustre_mdt_bytes_available` | MDT bytes available. |
 | `azure_managed_lustre_mdt_bytes_used` | MDT bytes used. |
 | `azure_managed_lustre_mdt_bytes_total` | MDT bytes total. |
@@ -61,14 +65,19 @@ The exporter discovers resources with Azure Resource Graph, reads Managed Lustre
 | `azure_managed_lustre_mdt_files_total` | MDT total file/inode count. |
 | `azure_managed_lustre_mdt_files_free_percent` | Derived MDT file/inode free percentage. |
 | `azure_managed_lustre_mdt_files_used_percent` | Derived MDT file/inode used percentage. |
+| `azure_managed_lustre_mdt_sample_timestamp_seconds` | Azure Monitor sample timestamp for each MDT metric series. |
 | `azure_managed_lustre_mdt_client_latency_milliseconds` | MDT client latency. |
 | `azure_managed_lustre_mdt_client_ops` | MDT client operations. |
+| `azure_managed_lustre_mdt_operation_sample_timestamp_seconds` | Azure Monitor sample timestamp for each MDT operation metric series. |
 | `azure_managed_lustre_hsm_action_errors` | HSM action errors (`HSMActionErrors`). |
 | `azure_managed_lustre_hsm_current_requests` | HSM in-flight requests (`HSMCurrentRequests`). |
 | `azure_managed_lustre_mdt_client_evictions` | Client evictions (`LustreClientEvictions`) from Azure Monitor. This is the latest Azure Monitor interval-total sample per MDT, or `mdtnum="all"` when Azure returns an aggregate series. |
 | `azure_managed_lustre_filesystem_client_evictions` | Derived filesystem-level client evictions, summed across MDTs or copied from the aggregate `mdtnum="all"` series. This is an interval-total gauge, not a Prometheus counter; use `max_over_time` or `sum_over_time` in PromQL. |
-| `azure_managed_lustre_ost_connected_clients` | OST connected client count / exports (`OSTConnectedClients`). Approximates clients seen by each OST; per-OST variance flags failover or eviction. |
 | `azure_managed_lustre_mdt_connected_clients` | MDT connected client count / exports (`MDTConnectedClients`). Each mounted client opens one export per MDT, so `max by (filesystem_name)` of this metric approximates the per-filesystem client count. |
+| `azure_managed_lustre_filesystem_connected_clients` | Derived per-filesystem connected client count, computed as the maximum MDT connected-client value for the filesystem. |
+| `azure_managed_lustre_metadata_amplification_ratio` | Derived AV/HPC metadata pressure signal: `sum(MDTClientOps) / max(sum(ClientReadOps + ClientWriteOps), 1)`. |
+| `azure_managed_lustre_filesystem_sample_max_age_seconds` | Derived age of the oldest Azure Monitor OST/MDT sample for each filesystem. |
+| `azure_managed_lustre_ost_sample_count` | Number of OST sample series produced by the latest collection. This approximates OST count only when every OST reports at least one metric. |
 | `azure_managed_lustre_last_success_timestamp_seconds` | Last successful Managed Lustre collection timestamp. |
 | `azure_managed_lustre_collection_duration_seconds` | Latest Managed Lustre collection duration. |
 | `azure_managed_lustre_collection_errors_total` | Managed Lustre collection error counter. |
@@ -177,16 +186,35 @@ Import the dashboards from `deploy/`:
 
 The Managed Lustre dashboard uses filesystem inventory metrics for dropdowns, so discovered filesystems remain visible even when Azure Monitor has no current OST or MDT sample for a filesystem.
 
+The Managed Lustre dashboard uses an AV/HPC Lustre operations layout with rows for overview, metadata triage, OST data path, storage capacity, client I/O, metadata performance, reliability and freshness, and inventory. The `Metadata triage` row groups metadata amplification, MDT latency, MDT operations, MDT inode usage, and MDT byte usage for FSx-for-Lustre versus AMLFS customer discussions, while the `OST data path` row keeps data-path latency, operations, and connected-client visibility for large sensor logs and write-heavy phases.
+
+For AV-specific interpretation of metadata-heavy workload signals, see [docs/av-industry.md](docs/av-industry.md).
+
 ## Prometheus alert rules
 
 [deploy/lustre-alert-rules.yaml](deploy/lustre-alert-rules.yaml) ships ready-to-use alert rules for the Managed Lustre signals, including:
 
 - `AzureManagedLustreCollectorStale` — collection has not completed recently.
 - `AzureManagedLustreSampleStale` — per-OST Azure Monitor sample is stale.
+- `AzureManagedLustreMdtSampleStale` and `AzureManagedLustreFilesystemSampleStale` — MDT or derived filesystem sample freshness is stale.
 - `AzureManagedLustreCollectionErrors` — non-zero collection error rate.
 - `AzureManagedLustreOstAvailablePercentLow` — OST available capacity below threshold.
+- `AzureManagedLustreOstUsedPercentWarn` and `AzureManagedLustreOstUsedPercentCritical` — OST used-capacity guardrails.
+- `AzureManagedLustreMdtBytesUsedPercentWarn` and `AzureManagedLustreMdtBytesUsedPercentCritical` — MDT byte-capacity guardrails.
+- `AzureManagedLustreMdtInodeUsedPercentWarn` and `AzureManagedLustreMdtInodeUsedPercentCritical` — MDT inode/file-count guardrails.
+- `AzureManagedLustreMdtLatencyWarn`, `AzureManagedLustreMdtLatencySerious`, and `AzureManagedLustreMdtLatencyHang` — MDT latency risk bands.
+- `AzureManagedLustreHsmActionErrors`, `AzureManagedLustreHsmBacklog`, and `AzureManagedLustreHsmBacklogCritical` — HSM reliability and backlog alerts.
+- `AzureManagedLustreClientEvictions` and `AzureManagedLustreClientEvictionBurst` — client reconnect/disruption alerts.
+- `AzureManagedLustreMetadataAmplificationHigh` and `AzureManagedLustreMetadataAmplificationCritical` — AV/HPC metadata-heavy workload alerts.
+- `AzureManagedLustreExporterNoLeader` — leader-election failure, which pauses collection.
 
-Apply with `kubectl apply -f deploy/lustre-alert-rules.yaml` against your Prometheus operator namespace, or import the group into your alert manager of choice.
+[deploy/vmss-alert-rules.yaml](deploy/vmss-alert-rules.yaml) ships VMSS alert rules, including:
+
+- `AzureVmssExporterStale` — VMSS Resource Graph collection has not completed recently.
+- `AzureVmssCollectionErrors` — non-zero VMSS collection error rate.
+- `AzureVmssCapacityDrift` — desired VMSS capacity differs from observed VM instances for a sustained period.
+
+Apply with `kubectl apply -f deploy/lustre-alert-rules.yaml` and `kubectl apply -f deploy/vmss-alert-rules.yaml` against your Prometheus operator namespace, or import the groups into your alert manager of choice.
 
 ## Azure Monitor managed Prometheus
 
@@ -219,6 +247,16 @@ azure_managed_lustre_ost_bytes_available_percent
 
 # Managed Lustre MDT file free percentage
 azure_managed_lustre_mdt_files_free_percent
+
+# Managed Lustre metadata amplification for AV/tiny-file workloads
+azure_managed_lustre_metadata_amplification_ratio
+
+# Managed Lustre filesystem telemetry freshness
+azure_managed_lustre_filesystem_sample_max_age_seconds
+
+# Managed Lustre filesystem connected clients and evictions
+azure_managed_lustre_filesystem_connected_clients
+azure_managed_lustre_filesystem_client_evictions
 
 # Managed Lustre read/write throughput by filesystem
 sum by (filesystem_name) (azure_managed_lustre_client_read_throughput_bytes_per_second)

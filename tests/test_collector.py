@@ -472,6 +472,10 @@ def test_lustre_filesystem_inventory_is_exposed_without_samples() -> None:
     )
     assert f"azure_managed_lustre_filesystem_info{{{info_labels}}} 1.0" in metrics
     assert (
+        f"azure_managed_lustre_discovered_filesystem_info{{{info_labels}}} 1.0"
+        in metrics
+    )
+    assert (
         f"azure_managed_lustre_filesystem_storage_capacity_tib"
         f"{{{capacity_labels}}} 8.0" in metrics
     )

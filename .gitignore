@@ -21,3 +21,4 @@ venv/
 .vscode/
 .DS_Store
 reports/
+docs/av-industry.md

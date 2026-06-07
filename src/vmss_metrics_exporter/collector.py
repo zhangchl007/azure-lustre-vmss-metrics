@@ -402,6 +402,16 @@ class VmssMetricsExporter:
             LUSTRE_FILESYSTEM_INFO_LABELS,
             registry=effective_registry,
         )
+        self.lustre_discovered_filesystem_info = Gauge(
+            "azure_managed_lustre_discovered_filesystem_info",
+            (
+                "Table-friendly identity metadata for each discovered Azure Managed "
+                "Lustre filesystem. Labels include subscription_id, resource_group, "
+                "filesystem_name, location, and sku_tier. The value is always 1."
+            ),
+            LUSTRE_FILESYSTEM_INFO_LABELS,
+            registry=effective_registry,
+        )
         self.lustre_filesystem_storage_capacity_tib = Gauge(
             "azure_managed_lustre_filesystem_storage_capacity_tib",
             "Configured Azure Managed Lustre filesystem storage capacity from Resource Graph.",
@@ -673,6 +683,7 @@ class VmssMetricsExporter:
                 self.lustre_mdt_client_ops,
                 self.lustre_mdt_operation_sample_timestamp,
                 self.lustre_filesystem_info,
+                self.lustre_discovered_filesystem_info,
                 self.lustre_filesystem_storage_capacity_tib,
                 self.lustre_filesystem_connected_clients,
                 self.lustre_filesystem_client_evictions,
@@ -903,6 +914,9 @@ class VmssMetricsExporter:
 
             for filesystem in filesystems:
                 self.lustre_filesystem_info.labels(*filesystem.info_label_values).set(1)
+                self.lustre_discovered_filesystem_info.labels(
+                    *filesystem.info_label_values
+                ).set(1)
                 self.lustre_filesystem_storage_capacity_tib.labels(
                     *filesystem.capacity_label_values
                 ).set(filesystem.storage_capacity_tib)

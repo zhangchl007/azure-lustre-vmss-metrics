@@ -24,6 +24,10 @@ from .models import (
 
 LOGGER = logging.getLogger(__name__)
 
+# Upper bound on the exponential backoff term so a high retry count or large
+# base delay cannot produce multi-minute sleeps that stall the collection loop.
+_MAX_RETRY_BACKOFF_SECONDS = 30.0
+
 AGGREGATE_DIMENSION_VALUE = "all"
 
 AMLFS_FILESYSTEMS_QUERY = """
@@ -353,8 +357,12 @@ class AzureManagedLustreCollector:
                 attempt += 1
 
     def _retry_delay(self, attempt: int) -> float:
+        backoff = min(
+            self._retry_base_delay_seconds * (2**attempt),
+            _MAX_RETRY_BACKOFF_SECONDS,
+        )
         jitter = random.uniform(0, self._retry_base_delay_seconds)
-        return (self._retry_base_delay_seconds * (2**attempt)) + jitter
+        return backoff + jitter
 
 
 def create_metrics_query_client(credential: object | None = None) -> MetricsQueryClientProtocol:
