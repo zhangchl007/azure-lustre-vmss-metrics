@@ -27,8 +27,22 @@
 - Tests live under `tests/`.
 - Kubernetes, Grafana, and alerting manifests live under `deploy/`.
 - Pressure-test scripts live under `scripts/`.
+- C++ simulator code and usage docs for reproducing the UAE `map` Azure Managed Lustre metadata issue live under `simulation/`.
+
+## Simulation workflow
+
+- Keep all C++ simulator source, local simulator Makefiles, and simulator-specific usage docs under `simulation/`.
+- The `simulation/` area is for reproducing the UAE `map` Lustre metadata/cache-fill scenario, including cold-cache fan-out, `.lock` file creation/removal, local temp download simulation, and cache writes to a Lustre-backed path.
+- Do not place simulator source or docs under `scripts/`; `scripts/` is for operational pressure-test and helper scripts.
+- Use safe defaults for simulator examples. Full-scale runs such as 20M files, 260 KiB average file size, 130 pods, and 6 threads per pod must require an explicit guard such as `--force` and should offer a dry-run mode.
+- Validate C++ simulator changes from `simulation/` with:
+  - `make`
+  - `make smoke`
+  - `make dry-run-cx` when the full UAE map scenario parameters are relevant.
+- Do not commit compiled simulator binaries or generated cache/test data.
 ## code style
 - Follow PEP 8 for Python code style.
+- For C++ simulator code, keep it self-contained, prefer standard library facilities, build with the local `simulation/Makefile`, and avoid external dependencies unless they are explicitly required.
 - For Kubernetes manifests, follow the standard Kubernetes YAML style and conventions.
 - For Grafana dashboards, follow the standard Grafana JSON style and conventions.
 

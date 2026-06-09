@@ -507,13 +507,13 @@
     {
       "type": "bargauge",
       "id": 10,
-      "title": "Current instance count by VMSS",
-      "description": "Most recent observed VM instance count, sorted descending. Labels include resource group so VMSS with identical names across clusters are not collapsed.",
+      "title": "Top VMSS by current instances",
+      "description": "Top selected VMSS by most recent observed instance count, sorted descending. Fleet totals above still include all VMSS; this panel is intentionally capped by Top N to stay readable at high cardinality.",
       "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
       "gridPos": {"h": 12, "w": 8, "x": 0, "y": 38},
       "targets": [
         {
-          "expr": "sort_desc(\n  max by (subscription_id, resource_group, vmss_name, location, orchestration_mode) (\n    azure_vmss_instance_count{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", vmss_name=~\"$vmss_name\", location=~\"$location\"}\n  )\n)",
+          "expr": "topk($top_n,\n  max by (subscription_id, resource_group, vmss_name, location, orchestration_mode) (\n    azure_vmss_instance_count{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", vmss_name=~\"$vmss_name\", location=~\"$location\"}\n  )\n)",
           "legendFormat": "{{vmss_name}} · {{resource_group}}",
           "refId": "A",
           "instant": true
@@ -581,20 +581,20 @@
     {
       "type": "table",
       "id": 11,
-      "title": "VMSS inventory (latest)",
-      "description": "Current VMSS view with VM size, desired capacity, actual instances, and drift. Sorted by current instance count descending so the largest VMSS appear first.",
+      "title": "Top VMSS inventory (latest)",
+      "description": "Current VMSS view capped by Top N current instance count, with VM size, desired capacity, actual instances, and drift. Fleet totals above still include all VMSS; use filters or raise Top N intentionally for broader detail.",
       "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
       "gridPos": {"h": 12, "w": 10, "x": 14, "y": 38},
       "targets": [
         {
-          "expr": "max by (subscription_id, resource_group, vmss_name, location, orchestration_mode) (\n  azure_vmss_instance_count{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", vmss_name=~\"$vmss_name\", location=~\"$location\"}\n)\n* on (subscription_id, resource_group, vmss_name, location, orchestration_mode) group_left(vm_size)\nmax by (subscription_id, resource_group, vmss_name, location, orchestration_mode, vm_size) (\n  azure_vmss_info{job=\"$job\"}\n)",
+          "expr": "topk($top_n,\n  max by (subscription_id, resource_group, vmss_name, location, orchestration_mode) (\n    azure_vmss_instance_count{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", vmss_name=~\"$vmss_name\", location=~\"$location\"}\n  )\n)\n* on (subscription_id, resource_group, vmss_name, location, orchestration_mode) group_left(vm_size)\nmax by (subscription_id, resource_group, vmss_name, location, orchestration_mode, vm_size) (\n  azure_vmss_info{job=\"$job\"}\n)",
           "legendFormat": "__auto",
           "refId": "A",
           "format": "table",
           "instant": true
         },
         {
-          "expr": "max by (subscription_id, resource_group, vmss_name, location, orchestration_mode) (\n  azure_vmss_capacity{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", vmss_name=~\"$vmss_name\", location=~\"$location\"}\n)\n* on (subscription_id, resource_group, vmss_name, location, orchestration_mode) group_left(vm_size)\nmax by (subscription_id, resource_group, vmss_name, location, orchestration_mode, vm_size) (\n  azure_vmss_info{job=\"$job\"}\n)",
+          "expr": "(\n  max by (subscription_id, resource_group, vmss_name, location, orchestration_mode) (\n    azure_vmss_capacity{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", vmss_name=~\"$vmss_name\", location=~\"$location\"}\n  )\n  and on (subscription_id, resource_group, vmss_name, location, orchestration_mode)\n  topk($top_n,\n    max by (subscription_id, resource_group, vmss_name, location, orchestration_mode) (\n      azure_vmss_instance_count{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", vmss_name=~\"$vmss_name\", location=~\"$location\"}\n    )\n  )\n)\n* on (subscription_id, resource_group, vmss_name, location, orchestration_mode) group_left(vm_size)\nmax by (subscription_id, resource_group, vmss_name, location, orchestration_mode, vm_size) (\n  azure_vmss_info{job=\"$job\"}\n)",
           "legendFormat": "__auto",
           "refId": "B",
           "format": "table",
@@ -858,13 +858,13 @@
         {
           "type": "table",
           "id": 203,
-          "title": "Standalone VMs (detail)",
-          "description": "Per-VM inventory joined with current power state. Suppressed when the standalone-VM count exceeds STANDALONE_VM_MAX_INVENTORY (default 5000).",
+          "title": "Standalone VMs detail (Top N sample)",
+          "description": "Per-VM inventory joined with current power state, capped by Top N so large standalone-VM fleets do not overload the dashboard. Suppressed when the standalone-VM count exceeds STANDALONE_VM_MAX_INVENTORY (default 5000). Use filters before increasing Top N.",
           "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
           "gridPos": {"h": 10, "w": 12, "x": 12, "y": 67},
           "targets": [
             {
-              "expr": "azure_vm_info{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", location=~\"$location\"}\n  * on (subscription_id, resource_group, vm_name) group_left(state)\n  (azure_vm_power_state{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\"} == 1)",
+              "expr": "topk($top_n,\n  azure_vm_info{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", location=~\"$location\"}\n  * on (subscription_id, resource_group, vm_name) group_left(state)\n  (azure_vm_power_state{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\"} == 1)\n)",
               "format": "table",
               "instant": true,
               "refId": "A"
@@ -1031,7 +1031,7 @@
       {
         "name": "top_n",
         "label": "Top N",
-        "description": "Limit per-VMSS panels (trend, state timeline, RG rollup) to the top N series. Crucial at high cardinality (100+ VMSS).",
+        "description": "Limit entity-level VMSS panels/tables and standalone VM detail samples to the top N series. Fleet summary and rollup panels still include all resources. Keep the default at 20 for high-cardinality environments, and narrow filters before raising it.",
         "type": "custom",
         "query": "5,10,20,50,100,500,1000",
         "current": {"selected": true, "text": "20", "value": "20"},
@@ -1075,6 +1075,6 @@
   "timezone": "",
   "title": "Azure VMSS Inventory & Trends",
   "uid": "azure-vmss-exporter",
-  "version": 3,
+  "version": 4,
   "weekStart": ""
 }
