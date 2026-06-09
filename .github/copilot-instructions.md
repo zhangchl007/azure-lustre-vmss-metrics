@@ -17,6 +17,9 @@
 
 - Always build container images as multi-arch (`linux/amd64,linux/arm64`) using `make image-multiarch TAG=<tag>`. AKS nodes are `amd64`, so a single-arch image built on an `aarch64` host (or vice versa) will fail to pull with `no match for platform in manifest`.
 - A `docker-container` buildx builder is required for true multi-arch builds; create it once with `docker buildx create --name multi --use --driver docker-container`.
+- If the `multi` docker-container builder repeatedly fails while resolving Docker Hub base-image metadata or auth tokens, use the verified default-builder fallback through the Makefile instead of switching to single-arch builds:
+  - `make image-multiarch TAG=<tag> DOCKER_BUILD_ARGS='--builder default'`
+  - This still builds and pushes a `linux/amd64,linux/arm64` multi-arch manifest. Example verified command: `make image-multiarch TAG=v39-target-operation-split DOCKER_BUILD_ARGS='--builder default'`.
 - `make image` builds a single-arch image for the host architecture (use only for local `docker-run` smoke tests, never for AKS deploys).
 - `make push` pushes a single-arch image to Docker Hub; `make image-multiarch` builds AND pushes the multi-arch manifest in one step.
 - `make deploy` applies the Kubernetes manifests in `deploy/` to the current kubectl context cluster.

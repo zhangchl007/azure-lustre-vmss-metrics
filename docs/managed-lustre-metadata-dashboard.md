@@ -4,11 +4,28 @@ This document explains the metadata-related parameters in the Managed Lustre Gra
 
 For the raw metric catalog, see [metrics.md](metrics.md). For dashboard import and alert-rule operations, see [grafana-prometheus.md](grafana-prometheus.md).
 
+Official references:
+
+- [Azure Managed Lustre monitoring data reference](https://learn.microsoft.com/en-us/azure/azure-managed-lustre/monitor-azure-managed-lustre-reference)
+- [Azure Monitor Metrics overview: multi-dimensional metrics](https://learn.microsoft.com/en-us/azure/azure-monitor/metrics/data-platform-metrics#multi-dimensional-metrics)
+
+## Azure Monitor / Exporter Scope
+
+This dashboard uses AMLFS Azure Monitor-derived metrics exported to Prometheus. It can show OST/MDT capacity, sampled MDT/OST latency and ops, client read/write throughput and ops, metadata amplification, evictions, HSM gauges, and telemetry freshness.
+
+It does **not** expose MDS CPU, MDS queue depth, client-side LNet counters, D-state processes, CSI mount latency, pod churn, or simulator/application counters. Use MDT latency, MDT ops, metadata amplification, client write/read ops, evictions, and sample age as proxy signals only. If service-side MDS CPU is available, correlate it separately.
+
+Azure Monitor's AMLFS client operation metrics expose target and operation dimensions (`ostnum` + `operation` for OST ops/latency, `mdtnum` + `operation` for MDT ops/latency). Operation panels query both dimensions, so legends should normally show target-specific series such as `OST0000 read` or `MDT0000 rename`. If an operation panel shows `ostnum="all"` or `mdtnum="all"`, treat it as a fallback or query/collection issue, not the expected split view.
+
+Some non-operation target metrics, such as capacity, HSM, or eviction gauges, can still be aggregate-only depending on the Azure Monitor response. In that case `ostnum="all"` or `mdtnum="all"` means the panel is showing a filesystem aggregate series rather than physical target imbalance. Azure Monitor samples may also lag short workload runs; compare workload time with `*_sample_timestamp_seconds` and filesystem sample age before concluding that a workload produced no signal.
+
 ## Key Interpretation Notes
 
 The Azure Managed Lustre metrics exported by this project are Azure Monitor-derived gauges. Operation and throughput series usually represent sampled values from a recent Azure Monitor time window. They are not monotonically increasing Prometheus counters, so do not wrap MDT operation or throughput gauges in `rate()`.
 
-Many Azure Managed Lustre environments expose aggregate target labels instead of physical per-target labels. In those cases the exporter uses labels such as `mdtnum="all"`. A dashboard panel grouped by `mdtnum` then shows the aggregate filesystem series, not a true physical per-MDT imbalance view. Use a mounted Lustre client and commands such as `lfs df -i /mnt/lustre` when physical MDT inode distribution must be verified.
+Azure Monitor's AMLFS client operation metrics expose both target and operation dimensions: `mdtnum` plus `operation` for MDT client operation metrics, and `ostnum` plus `operation` for OST client operation metrics. The exporter queries both dimensions, so operation panels should normally show target-specific series such as `MDT0000 rename` or `OST0001 read`.
+
+Some non-operation target metrics, such as capacity, HSM, or eviction gauges, can still be aggregate-only depending on the Azure Monitor response. In those cases the exporter uses labels such as `mdtnum="all"`. A dashboard panel grouped by `mdtnum` then shows the aggregate filesystem series, not a true physical per-MDT imbalance view. Use a mounted Lustre client and commands such as `lfs df -i /mnt/lustre` when physical MDT inode distribution must be verified.
 
 The dashboard is a triage view. It can show metadata pressure, sampled MDT latency, operation volume, inode usage, byte usage, client evictions, HSM backpressure, and sample freshness. It cannot prove MDS CPU saturation, MDS queue depth, lock queue depth, client D-state processes, CSI mount latency, or application-side operation counts by itself.
 
@@ -195,16 +212,16 @@ Dashboard query shape:
 ```promql
 topk($top_n,
   max by (filesystem_name, mdtnum, operation) (
-    azure_managed_lustre_mdt_client_ops{..., operation=~"$operation"}
+    azure_managed_lustre_mdt_client_ops{..., mdtnum=~"$mdtnum", operation=~"$operation"}
   )
 )
 ```
 
 This panel shows which metadata operations are generating the most volume. It should be read together with `MDT latency by operation`.
 
-The dashboard includes an `MDT operation` variable populated from the `operation` label on `azure_managed_lustre_mdt_client_ops`. When Azure Monitor exposes the Client MDT Ops `Operation` dimension, this dropdown can show values such as `sync`, `getxattr`, `rmdir`, `mkdir`, `statfs`, `samedir_rename`, `rename`, and `setattr`. Selecting one or more values filters the operation latency, operation volume, and current latency incident panels. Selecting `All` keeps the Azure Monitor-style split-by-operation view.
+The dashboard includes an `MDT operation` variable populated from the `operation` label on `azure_managed_lustre_mdt_client_ops`. Azure Monitor's AMLFS metric definitions expose both the target dimension (`mdtnum` for MDT metrics, `ostnum` for OST metrics) and the `operation` dimension for client operation metrics. The exporter queries both dimensions, so operation panels should normally show target-specific series such as `MDT0000 rename` or `OST0001 read` when Azure Monitor returns those dimensions. Selecting one or more operation values filters the operation latency, operation volume, and current latency incident panels. Selecting `All` keeps the Azure Monitor-style split-by-operation view.
 
-If the dropdown only contains `all`, Azure Monitor returned aggregate-only samples for the selected filesystem and time range, so Grafana cannot break the series down by operation.
+If the dropdown only contains `all`, treat it as a fallback signal that Azure Monitor did not return operation dimensions for the selected metric response, or the exporter query did not request the target and operation dimensions correctly.
 
 Common patterns:
 

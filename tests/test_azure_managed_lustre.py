@@ -8,8 +8,9 @@ import pytest
 
 from vmss_metrics_exporter.azure_managed_lustre import (
     AMLFS_FILESYSTEMS_QUERY,
+    AZURE_MONITOR_MDT_OPERATION_SPLIT_FILTER,
     AZURE_MONITOR_METRIC_NAMES_PER_REQUEST,
-    AZURE_MONITOR_OPERATION_SPLIT_FILTER,
+    AZURE_MONITOR_OST_OPERATION_SPLIT_FILTER,
     LUSTRE_METRICS,
     LUSTRE_OPERATION_AVERAGE_METRICS,
     LUSTRE_SIMPLE_AVERAGE_METRICS,
@@ -939,11 +940,11 @@ def test_collector_discovers_and_collects_metrics(monkeypatch: pytest.MonkeyPatc
             LUSTRE_SIMPLE_AVERAGE_METRICS, AZURE_MONITOR_METRIC_NAMES_PER_REQUEST
         )
     ]
-    expected_batches.extend(
-        list(batch)
-        for batch in _chunk_metric_names(
-            LUSTRE_OPERATION_AVERAGE_METRICS, AZURE_MONITOR_METRIC_NAMES_PER_REQUEST
-        )
+    expected_batches.append(
+        ["OSTClientLatency", "OSTClientOps"],
+    )
+    expected_batches.append(
+        ["MDTClientLatency", "MDTClientOps"],
     )
     expected_batches.extend(
         list(batch)
@@ -952,16 +953,15 @@ def test_collector_discovers_and_collects_metrics(monkeypatch: pytest.MonkeyPatc
         )
     )
     assert metrics_client.metric_names == expected_batches
-    operation_calls = [
-        kwargs
+    operation_filters = {
+        tuple(names): kwargs.get("filter")
         for names, kwargs in zip(metrics_client.metric_names, metrics_client.kwargs, strict=True)
         if any(name in LUSTRE_OPERATION_AVERAGE_METRICS for name in names)
-    ]
-    assert operation_calls
-    assert all(
-        call.get("filter") == AZURE_MONITOR_OPERATION_SPLIT_FILTER
-        for call in operation_calls
-    )
+    }
+    assert operation_filters == {
+        tuple(["OSTClientLatency", "OSTClientOps"]): AZURE_MONITOR_OST_OPERATION_SPLIT_FILTER,
+        tuple(["MDTClientLatency", "MDTClientOps"]): AZURE_MONITOR_MDT_OPERATION_SPLIT_FILTER,
+    }
 
 
 def test_collector_isolates_per_filesystem_metric_failures(

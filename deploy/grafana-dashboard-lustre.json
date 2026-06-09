@@ -1314,7 +1314,7 @@
       "targets": [
         {
           "expr": "topk($top_n, max by (filesystem_name, ostnum, operation) (azure_managed_lustre_ost_client_latency_milliseconds{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", filesystem_name=~\"$filesystem_name\", location=~\"$location\", ostnum=~\"$ostnum\"}))",
-          "legendFormat": "{{filesystem_name}} OST {{ostnum}} {{operation}}",
+          "legendFormat": "{{filesystem_name}} {{ostnum}} {{operation}}",
           "refId": "A"
         }
       ],
@@ -1404,7 +1404,7 @@
       "targets": [
         {
           "expr": "topk($top_n, max by (filesystem_name, ostnum, operation) (azure_managed_lustre_ost_client_ops{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", filesystem_name=~\"$filesystem_name\", location=~\"$location\", ostnum=~\"$ostnum\"}))",
-          "legendFormat": "{{filesystem_name}} OST {{ostnum}} {{operation}}",
+          "legendFormat": "{{filesystem_name}} {{ostnum}} {{operation}}",
           "refId": "A"
         }
       ],
@@ -2092,7 +2092,7 @@
       "targets": [
         {
           "expr": "topk($top_n, max by (filesystem_name, mdtnum, operation) (azure_managed_lustre_mdt_client_latency_milliseconds{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", filesystem_name=~\"$filesystem_name\", location=~\"$location\", mdtnum=~\"$mdtnum\", operation=~\"$operation\"}))",
-          "legendFormat": "{{filesystem_name}} MDT {{mdtnum}} {{operation}}",
+          "legendFormat": "{{filesystem_name}} {{mdtnum}} {{operation}}",
           "refId": "A"
         }
       ],
@@ -2182,7 +2182,7 @@
       "targets": [
         {
           "expr": "topk($top_n, max by (filesystem_name, mdtnum, operation) (azure_managed_lustre_mdt_client_ops{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", filesystem_name=~\"$filesystem_name\", location=~\"$location\", mdtnum=~\"$mdtnum\", operation=~\"$operation\"}))",
-          "legendFormat": "{{filesystem_name}} MDT {{mdtnum}} {{operation}}",
+          "legendFormat": "{{filesystem_name}} {{mdtnum}} {{operation}}",
           "refId": "A"
         }
       ],
@@ -2882,23 +2882,6 @@
           "countRows": false,
           "fields": ""
         }
-      },
-      "pluginVersion": "10.4.0"
-    },
-    {
-      "type": "text",
-      "id": 170,
-      "title": "Azure Monitor visibility limits",
-      "description": "What this dashboard can and cannot prove from Azure Monitor / exporter metrics alone.",
-      "gridPos": {
-        "h": 8,
-        "w": 24,
-        "x": 0,
-        "y": 111
-      },
-      "options": {
-        "mode": "markdown",
-        "content": "### Azure Monitor / exporter scope\n\nThis dashboard uses AMLFS Azure Monitor-derived metrics exported to Prometheus. It can show OST/MDT capacity, sampled MDT/OST latency and ops, client read/write throughput and ops, metadata amplification, evictions, HSM gauges, and telemetry freshness.\n\nIt does **not** expose MDS CPU, MDS queue depth, client-side LNet counters, D-state processes, CSI mount latency, pod churn, or simulator/application counters. Use MDT latency, MDT ops, metadata amplification, client write/read ops, evictions, and sample age as proxy signals only. If service-side MDS CPU is available, correlate it separately.\n\nAzure Monitor labels may be aggregate-only (`ostnum=\"all\"`, `mdtnum=\"all\"`). In that case per-OST/per-MDT panels show filesystem aggregate series rather than physical target imbalance. Azure Monitor samples may also lag short workload runs; compare workload time with `*_sample_timestamp_seconds` and filesystem sample age before concluding that a workload produced no signal."
       },
       "pluginVersion": "10.4.0"
     }

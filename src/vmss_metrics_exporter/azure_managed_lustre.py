@@ -113,7 +113,8 @@ LUSTRE_OPERATION_AVERAGE_METRICS = OST_OPERATION_METRICS + MDT_OPERATION_METRICS
 LUSTRE_AVERAGE_METRICS = OST_METRICS + MDT_SIMPLE_METRICS + MDT_OPERATION_METRICS
 LUSTRE_TOTAL_METRICS = MDT_TOTAL_METRICS
 LUSTRE_METRICS = LUSTRE_AVERAGE_METRICS + LUSTRE_TOTAL_METRICS
-AZURE_MONITOR_OPERATION_SPLIT_FILTER = "Operation eq '*'"
+AZURE_MONITOR_OST_OPERATION_SPLIT_FILTER = "ostnum eq '*' and operation eq '*'"
+AZURE_MONITOR_MDT_OPERATION_SPLIT_FILTER = "mdtnum eq '*' and operation eq '*'"
 
 _ISO_DURATION_PATTERN = re.compile(r"^PT(?:(?P<hours>\d+)H)?(?:(?P<minutes>\d+)M)?$", re.IGNORECASE)
 
@@ -318,18 +319,21 @@ class AzureManagedLustreCollector:
                 )
             )
             merged_metrics.extend(_iter_sequence_attr(response, "metrics"))
-        for batch in _chunk_metric_names(
-            LUSTRE_OPERATION_AVERAGE_METRICS, AZURE_MONITOR_METRIC_NAMES_PER_REQUEST
+        for batch, dimension_filter in (
+            (OST_OPERATION_METRICS, AZURE_MONITOR_OST_OPERATION_SPLIT_FILTER),
+            (MDT_OPERATION_METRICS, AZURE_MONITOR_MDT_OPERATION_SPLIT_FILTER),
         ):
             response = self._execute_with_retry(
-                lambda batch=batch: self._metrics_client.query_resource(
-                    filesystem.resource_id,
-                    list(batch),
-                    metric_namespace=LUSTRE_METRIC_NAMESPACE,
-                    timespan=self._lookback,
-                    granularity=self._granularity,
-                    aggregations=["Average"],
-                    filter=AZURE_MONITOR_OPERATION_SPLIT_FILTER,
+                lambda batch=batch, dimension_filter=dimension_filter: (
+                    self._metrics_client.query_resource(
+                        filesystem.resource_id,
+                        list(batch),
+                        metric_namespace=LUSTRE_METRIC_NAMESPACE,
+                        timespan=self._lookback,
+                        granularity=self._granularity,
+                        aggregations=["Average"],
+                        filter=dimension_filter,
+                    )
                 )
             )
             merged_metrics.extend(_iter_sequence_attr(response, "metrics"))
