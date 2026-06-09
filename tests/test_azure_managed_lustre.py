@@ -9,8 +9,10 @@ import pytest
 from vmss_metrics_exporter.azure_managed_lustre import (
     AMLFS_FILESYSTEMS_QUERY,
     AZURE_MONITOR_METRIC_NAMES_PER_REQUEST,
-    LUSTRE_AVERAGE_METRICS,
+    AZURE_MONITOR_OPERATION_SPLIT_FILTER,
     LUSTRE_METRICS,
+    LUSTRE_OPERATION_AVERAGE_METRICS,
+    LUSTRE_SIMPLE_AVERAGE_METRICS,
     LUSTRE_TOTAL_METRICS,
     AzureManagedLustreCollector,
     _chunk_metric_names,
@@ -66,10 +68,12 @@ class FakeMetricsClient:
     def __init__(self) -> None:
         self.resource_uris: list[str] = []
         self.metric_names: list[object] = []
+        self.kwargs: list[dict[str, object]] = []
 
-    def query_resource(self, resource_uri: str, metric_names: object, **_kwargs: object) -> object:
+    def query_resource(self, resource_uri: str, metric_names: object, **kwargs: object) -> object:
         self.resource_uris.append(resource_uri)
         self.metric_names.append(metric_names)
+        self.kwargs.append(kwargs)
         return {
             "metrics": [
                 {
@@ -841,6 +845,45 @@ def test_normalize_lustre_metrics_response_accepts_dimensionless_aggregate_serie
     assert mdt_operations[0].client_ops == 84.0
 
 
+def test_normalize_lustre_metrics_response_accepts_mapping_metadata_values() -> None:
+    filesystem = ManagedLustreFilesystem(
+        "sub-a",
+        "rg-a",
+        "lustre-a",
+        "/subscriptions/sub-a/resourceGroups/rg-a/providers/"
+        "Microsoft.StorageCache/amlFilesystems/lustre-a",
+        "westus3",
+    )
+
+    _ost_metrics, _ost_operations, _mdt_metrics, mdt_operations = (
+        normalize_lustre_metrics_response(
+            filesystem,
+            {
+                "metrics": [
+                    {
+                        "name": "MDTClientOps",
+                        "timeseries": [
+                            {
+                                "metadata_values": {"operation": "setattr"},
+                                "data": [{"average": 123.0}],
+                            },
+                            {
+                                "metadata_values": {"operation": "statfs"},
+                                "data": [{"average": 15.0}],
+                            },
+                        ],
+                    }
+                ]
+            },
+        )
+    )
+
+    assert [(metric.mdtnum, metric.operation, metric.client_ops) for metric in mdt_operations] == [
+        ("all", "setattr", 123.0),
+        ("all", "statfs", 15.0),
+    ]
+
+
 def test_collector_discovers_and_collects_metrics(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "vmss_metrics_exporter.azure_managed_lustre.build_query_request",
@@ -893,9 +936,15 @@ def test_collector_discovers_and_collects_metrics(monkeypatch: pytest.MonkeyPatc
     expected_batches = [
         list(batch)
         for batch in _chunk_metric_names(
-            LUSTRE_AVERAGE_METRICS, AZURE_MONITOR_METRIC_NAMES_PER_REQUEST
+            LUSTRE_SIMPLE_AVERAGE_METRICS, AZURE_MONITOR_METRIC_NAMES_PER_REQUEST
         )
     ]
+    expected_batches.extend(
+        list(batch)
+        for batch in _chunk_metric_names(
+            LUSTRE_OPERATION_AVERAGE_METRICS, AZURE_MONITOR_METRIC_NAMES_PER_REQUEST
+        )
+    )
     expected_batches.extend(
         list(batch)
         for batch in _chunk_metric_names(
@@ -903,6 +952,16 @@ def test_collector_discovers_and_collects_metrics(monkeypatch: pytest.MonkeyPatc
         )
     )
     assert metrics_client.metric_names == expected_batches
+    operation_calls = [
+        kwargs
+        for names, kwargs in zip(metrics_client.metric_names, metrics_client.kwargs, strict=True)
+        if any(name in LUSTRE_OPERATION_AVERAGE_METRICS for name in names)
+    ]
+    assert operation_calls
+    assert all(
+        call.get("filter") == AZURE_MONITOR_OPERATION_SPLIT_FILTER
+        for call in operation_calls
+    )
 
 
 def test_collector_isolates_per_filesystem_metric_failures(

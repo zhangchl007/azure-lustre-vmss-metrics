@@ -108,9 +108,12 @@ MDT_OPERATION_METRICS = (
 )
 MDT_TOTAL_METRICS = (LUSTRE_CLIENT_EVICTIONS_METRIC,)
 MDT_METRICS = MDT_SIMPLE_METRICS + MDT_OPERATION_METRICS + MDT_TOTAL_METRICS
+LUSTRE_SIMPLE_AVERAGE_METRICS = OST_SIMPLE_METRICS + MDT_SIMPLE_METRICS
+LUSTRE_OPERATION_AVERAGE_METRICS = OST_OPERATION_METRICS + MDT_OPERATION_METRICS
 LUSTRE_AVERAGE_METRICS = OST_METRICS + MDT_SIMPLE_METRICS + MDT_OPERATION_METRICS
 LUSTRE_TOTAL_METRICS = MDT_TOTAL_METRICS
 LUSTRE_METRICS = LUSTRE_AVERAGE_METRICS + LUSTRE_TOTAL_METRICS
+AZURE_MONITOR_OPERATION_SPLIT_FILTER = "Operation eq '*'"
 
 _ISO_DURATION_PATTERN = re.compile(r"^PT(?:(?P<hours>\d+)H)?(?:(?P<minutes>\d+)M)?$", re.IGNORECASE)
 
@@ -302,7 +305,7 @@ class AzureManagedLustreCollector:
         self._apply_request_jitter()
         merged_metrics: list[Any] = []
         for batch in _chunk_metric_names(
-            LUSTRE_AVERAGE_METRICS, AZURE_MONITOR_METRIC_NAMES_PER_REQUEST
+            LUSTRE_SIMPLE_AVERAGE_METRICS, AZURE_MONITOR_METRIC_NAMES_PER_REQUEST
         ):
             response = self._execute_with_retry(
                 lambda batch=batch: self._metrics_client.query_resource(
@@ -312,6 +315,21 @@ class AzureManagedLustreCollector:
                     timespan=self._lookback,
                     granularity=self._granularity,
                     aggregations=["Average"],
+                )
+            )
+            merged_metrics.extend(_iter_sequence_attr(response, "metrics"))
+        for batch in _chunk_metric_names(
+            LUSTRE_OPERATION_AVERAGE_METRICS, AZURE_MONITOR_METRIC_NAMES_PER_REQUEST
+        ):
+            response = self._execute_with_retry(
+                lambda batch=batch: self._metrics_client.query_resource(
+                    filesystem.resource_id,
+                    list(batch),
+                    metric_namespace=LUSTRE_METRIC_NAMESPACE,
+                    timespan=self._lookback,
+                    granularity=self._granularity,
+                    aggregations=["Average"],
+                    filter=AZURE_MONITOR_OPERATION_SPLIT_FILTER,
                 )
             )
             merged_metrics.extend(_iter_sequence_attr(response, "metrics"))
@@ -468,11 +486,19 @@ def normalize_lustre_metrics_response(
             ostnum: str | None = None
             mdtnum: str | None = None
             if metric_name in OST_METRICS:
-                ostnum = _dimension_value_or_aggregate(time_series, "ostnum")
+                ostnum = _dimension_value_or_aggregate(
+                    time_series,
+                    "ostnum",
+                    aggregate_when_missing=metric_name in OST_OPERATION_METRICS,
+                )
                 if not ostnum:
                     continue
             elif metric_name in MDT_METRICS:
-                mdtnum = _dimension_value_or_aggregate(time_series, "mdtnum")
+                mdtnum = _dimension_value_or_aggregate(
+                    time_series,
+                    "mdtnum",
+                    aggregate_when_missing=metric_name in MDT_OPERATION_METRICS,
+                )
                 if not mdtnum:
                     continue
             else:
@@ -820,6 +846,16 @@ def _metric_name(metric: object) -> str | None:
 
 
 def _dimension_value(time_series: object, dimension_name: str) -> str | None:
+    metadata_values = _attr_or_mapping(time_series, "metadata_values")
+    if isinstance(metadata_values, Mapping):
+        for raw_name, value in metadata_values.items():
+            if (
+                str(raw_name).lower() == dimension_name.lower()
+                and value is not None
+                and str(value).strip()
+            ):
+                return str(value)
+        return None
     for metadata in _iter_sequence_attr(time_series, "metadata_values"):
         name = _attr_or_mapping(metadata, "name")
         raw_name = _attr_or_mapping(name, "value") if name is not None else None
@@ -831,11 +867,21 @@ def _dimension_value(time_series: object, dimension_name: str) -> str | None:
     return None
 
 
-def _dimension_value_or_aggregate(time_series: object, dimension_name: str) -> str | None:
-    metadata_values = _iter_sequence_attr(time_series, "metadata_values")
+def _dimension_value_or_aggregate(
+    time_series: object,
+    dimension_name: str,
+    *,
+    aggregate_when_missing: bool = False,
+) -> str | None:
+    metadata_values = _attr_or_mapping(time_series, "metadata_values")
     if not metadata_values:
         return AGGREGATE_DIMENSION_VALUE
-    return _dimension_value(time_series, dimension_name)
+    value = _dimension_value(time_series, dimension_name)
+    if value:
+        return value
+    if aggregate_when_missing:
+        return AGGREGATE_DIMENSION_VALUE
+    return None
 
 
 def _latest_average(time_series: object) -> tuple[float, float | None] | None:

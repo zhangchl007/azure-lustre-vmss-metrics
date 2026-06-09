@@ -2078,7 +2078,7 @@
       "type": "timeseries",
       "id": 41,
       "title": "MDT latency by operation",
-      "description": "Top selected MDT operation latencies by filesystem and operation.",
+      "description": "Top selected MDT operation latencies by filesystem and operation. Use the Operation variable to focus on sync, getattr/statfs, rename, setattr, and other Azure Monitor operation labels. If Operation only contains all, Azure Monitor is returning aggregate-only samples.",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
@@ -2091,7 +2091,7 @@
       },
       "targets": [
         {
-          "expr": "topk($top_n, max by (filesystem_name, mdtnum, operation) (azure_managed_lustre_mdt_client_latency_milliseconds{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", filesystem_name=~\"$filesystem_name\", location=~\"$location\", mdtnum=~\"$mdtnum\"}))",
+          "expr": "topk($top_n, max by (filesystem_name, mdtnum, operation) (azure_managed_lustre_mdt_client_latency_milliseconds{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", filesystem_name=~\"$filesystem_name\", location=~\"$location\", mdtnum=~\"$mdtnum\", operation=~\"$operation\"}))",
           "legendFormat": "{{filesystem_name}} MDT {{mdtnum}} {{operation}}",
           "refId": "A"
         }
@@ -2168,7 +2168,7 @@
       "type": "timeseries",
       "id": 42,
       "title": "MDT ops by operation",
-      "description": "Top selected MDT operation counts by filesystem and operation.",
+      "description": "Top selected MDT operation counts by filesystem and operation. Mirrors Azure Monitor's Client MDT Ops split by Operation when that dimension is present.",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
@@ -2181,7 +2181,7 @@
       },
       "targets": [
         {
-          "expr": "topk($top_n, max by (filesystem_name, mdtnum, operation) (azure_managed_lustre_mdt_client_ops{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", filesystem_name=~\"$filesystem_name\", location=~\"$location\", mdtnum=~\"$mdtnum\"}))",
+          "expr": "topk($top_n, max by (filesystem_name, mdtnum, operation) (azure_managed_lustre_mdt_client_ops{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", filesystem_name=~\"$filesystem_name\", location=~\"$location\", mdtnum=~\"$mdtnum\", operation=~\"$operation\"}))",
           "legendFormat": "{{filesystem_name}} MDT {{mdtnum}} {{operation}}",
           "refId": "A"
         }
@@ -2238,7 +2238,7 @@
       "type": "table",
       "id": 43,
       "title": "MDT latency incidents now",
-      "description": "Only shows current MDT operation latency above 100 ms. Empty means no current MDT latency issue above the warning threshold.",
+      "description": "Only shows current MDT operation latency above 100 ms for the selected Operation values. Empty means no current MDT latency issue above the warning threshold.",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
@@ -2251,7 +2251,7 @@
       },
       "targets": [
         {
-          "expr": "topk($top_n, max by (subscription_id, resource_group, filesystem_name, location, mdtnum, operation) (azure_managed_lustre_mdt_client_latency_milliseconds{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", filesystem_name=~\"$filesystem_name\", location=~\"$location\", mdtnum=~\"$mdtnum\"}) > 100)",
+          "expr": "topk($top_n, max by (subscription_id, resource_group, filesystem_name, location, mdtnum, operation) (azure_managed_lustre_mdt_client_latency_milliseconds{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", filesystem_name=~\"$filesystem_name\", location=~\"$location\", mdtnum=~\"$mdtnum\", operation=~\"$operation\"}) > 100)",
           "legendFormat": "{{filesystem_name}}",
           "refId": "A",
           "format": "table",
@@ -3147,6 +3147,38 @@
         },
         "options": [],
         "hide": 2,
+        "skipUrlSync": false
+      },
+      {
+        "name": "operation",
+        "label": "MDT operation",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${DS_PROMETHEUS}"
+        },
+        "query": {
+          "qryType": 1,
+          "query": "label_values(azure_managed_lustre_mdt_client_ops{job=\"$job\", subscription_id=~\"$subscription_id\", location=~\"$location\", resource_group=~\"$resource_group\", filesystem_name=~\"$filesystem_name\", mdtnum=~\"$mdtnum\"}, operation)",
+          "refId": "StandardVariableQuery"
+        },
+        "definition": "label_values(azure_managed_lustre_mdt_client_ops{job=\"$job\", subscription_id=~\"$subscription_id\", location=~\"$location\", resource_group=~\"$resource_group\", filesystem_name=~\"$filesystem_name\", mdtnum=~\"$mdtnum\"}, operation)",
+        "refresh": 2,
+        "sort": 1,
+        "multi": true,
+        "includeAll": true,
+        "allValue": ".*",
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "options": [],
+        "hide": 0,
         "skipUrlSync": false
       },
       {

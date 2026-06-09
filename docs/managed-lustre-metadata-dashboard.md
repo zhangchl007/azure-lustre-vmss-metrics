@@ -195,12 +195,16 @@ Dashboard query shape:
 ```promql
 topk($top_n,
   max by (filesystem_name, mdtnum, operation) (
-    azure_managed_lustre_mdt_client_ops{...}
+    azure_managed_lustre_mdt_client_ops{..., operation=~"$operation"}
   )
 )
 ```
 
 This panel shows which metadata operations are generating the most volume. It should be read together with `MDT latency by operation`.
+
+The dashboard includes an `MDT operation` variable populated from the `operation` label on `azure_managed_lustre_mdt_client_ops`. When Azure Monitor exposes the Client MDT Ops `Operation` dimension, this dropdown can show values such as `sync`, `getxattr`, `rmdir`, `mkdir`, `statfs`, `samedir_rename`, `rename`, and `setattr`. Selecting one or more values filters the operation latency, operation volume, and current latency incident panels. Selecting `All` keeps the Azure Monitor-style split-by-operation view.
+
+If the dropdown only contains `all`, Azure Monitor returned aggregate-only samples for the selected filesystem and time range, so Grafana cannot break the series down by operation.
 
 Common patterns:
 
