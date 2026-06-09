@@ -39,6 +39,12 @@
       "id": "table",
       "name": "Table",
       "version": ""
+    },
+    {
+      "type": "panel",
+      "id": "text",
+      "name": "Text",
+      "version": ""
     }
   ],
   "annotations": {
@@ -204,8 +210,8 @@
     {
       "type": "stat",
       "id": 5,
-      "title": "OST used max",
-      "description": "Highest selected OST used percentage. Write-heavy phases should stay below the safety boundary.",
+      "title": "OST used max (aggregate if ostnum=all)",
+      "description": "Highest selected OST used percentage. In AMLFS aggregate-only environments this is ostnum=\"all\", not a physical per-OST maximum. Write-heavy phases should stay below the safety boundary.",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
@@ -265,8 +271,8 @@
     {
       "type": "stat",
       "id": 6,
-      "title": "MDT latency max",
-      "description": "Worst selected MDT operation latency. Warning at 100 ms, serious at 500 ms, hang-risk at 1000 ms.",
+      "title": "MDT latency max (Azure Monitor sample)",
+      "description": "Worst selected MDT operation latency from Azure Monitor MDTClientLatency. This is a sampled aggregate/mean, not p95/p99 and not MDS CPU. Warning at 100 ms, serious at 500 ms, hang-risk at 1000 ms.",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
@@ -466,8 +472,8 @@
     {
       "type": "stat",
       "id": 14,
-      "title": "MDT inode used",
-      "description": "Highest selected MDT file/inode usage.",
+      "title": "MDT inode used (aggregate if mdtnum=all)",
+      "description": "Highest selected MDT file/inode usage. In AMLFS aggregate-only environments this is mdtnum=\"all\", not a physical per-MDT maximum.",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
@@ -527,8 +533,8 @@
     {
       "type": "stat",
       "id": 15,
-      "title": "MDT bytes used",
-      "description": "Highest selected MDT byte usage. Byte pressure is less common than inode pressure but still blocks metadata growth when exhausted.",
+      "title": "MDT bytes used (aggregate if mdtnum=all)",
+      "description": "Highest selected MDT byte usage. In AMLFS aggregate-only environments this is mdtnum=\"all\". Byte pressure is less common than inode pressure but still blocks metadata growth when exhausted.",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
@@ -663,8 +669,8 @@
     {
       "type": "timeseries",
       "id": 21,
-      "title": "OST used %",
-      "description": "Top selected OST used percentages. Warning at 75%, critical at 80%.",
+      "title": "OST used % (aggregate if ostnum=all)",
+      "description": "Top selected OST used percentages. In AMLFS aggregate-only environments this is an ostnum=\"all\" filesystem aggregate, not physical per-OST imbalance. Warning at 75%, critical at 80%.",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
@@ -741,8 +747,8 @@
     {
       "type": "timeseries",
       "id": 70,
-      "title": "OST available",
-      "description": "Absolute free space per top selected OST. Warning below 1 TiB, critical below 100 GiB. Used % alone hides absolute headroom on large targets.",
+      "title": "OST available (aggregate if ostnum=all)",
+      "description": "Absolute free space for selected OST series. In AMLFS aggregate-only environments this is ostnum=\"all\" filesystem aggregate, not physical per-OST free space. Warning below 1 TiB, critical below 100 GiB. Used % alone hides absolute headroom on large targets.",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
@@ -822,8 +828,8 @@
     {
       "type": "timeseries",
       "id": 22,
-      "title": "MDT bytes used %",
-      "description": "Top selected MDT byte usage. Warning at 75%, critical at 90%.",
+      "title": "MDT bytes used % (aggregate if mdtnum=all)",
+      "description": "Top selected MDT byte usage. In AMLFS aggregate-only environments this is mdtnum=\"all\" filesystem aggregate. Warning at 75%, critical at 90%.",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
@@ -900,8 +906,8 @@
     {
       "type": "timeseries",
       "id": 23,
-      "title": "MDT inode used %",
-      "description": "Top selected MDT inode/file usage. Warning at 70%, critical at 85%.",
+      "title": "MDT inode used % (aggregate if mdtnum=all)",
+      "description": "Top selected MDT inode/file usage. In AMLFS aggregate-only environments this is mdtnum=\"all\" filesystem aggregate. Warning at 70%, critical at 85%.",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
@@ -1031,8 +1037,8 @@
     {
       "type": "table",
       "id": 72,
-      "title": "Lowest OST free-space",
-      "description": "Lowest selected OST free-space rows. Values below 1 TiB are warning, below 100 GiB are critical.",
+      "title": "Lowest OST free-space (per-series)",
+      "description": "Lowest selected OST free-space rows. This is only a true physical per-OST view when Azure Monitor exposes per-OST labels; with ostnum=\"all\" it is the filesystem aggregate. Values below 1 TiB are warning, below 100 GiB are critical.",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
@@ -1165,8 +1171,8 @@
     {
       "type": "stat",
       "id": 25,
-      "title": "OSTs >75%",
-      "description": "Number of selected OST series above the data-capacity warning threshold.",
+      "title": "OST series >75%",
+      "description": "Number of selected OST metric series above the data-capacity warning threshold. With ostnum=\"all\" this counts the aggregate filesystem series, not physical OST count.",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
@@ -1222,8 +1228,8 @@
     {
       "type": "stat",
       "id": 26,
-      "title": "MDTs >70% inode",
-      "description": "Number of selected MDT series above the inode warning threshold.",
+      "title": "MDT series >70% inode",
+      "description": "Number of selected MDT metric series above the inode warning threshold. With mdtnum=\"all\" this counts the aggregate filesystem series, not physical MDT count.",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
@@ -2876,6 +2882,23 @@
           "countRows": false,
           "fields": ""
         }
+      },
+      "pluginVersion": "10.4.0"
+    },
+    {
+      "type": "text",
+      "id": 170,
+      "title": "Azure Monitor visibility limits",
+      "description": "What this dashboard can and cannot prove from Azure Monitor / exporter metrics alone.",
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 111
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "### Azure Monitor / exporter scope\n\nThis dashboard uses AMLFS Azure Monitor-derived metrics exported to Prometheus. It can show OST/MDT capacity, sampled MDT/OST latency and ops, client read/write throughput and ops, metadata amplification, evictions, HSM gauges, and telemetry freshness.\n\nIt does **not** expose MDS CPU, MDS queue depth, client-side LNet counters, D-state processes, CSI mount latency, pod churn, or simulator/application counters. Use MDT latency, MDT ops, metadata amplification, client write/read ops, evictions, and sample age as proxy signals only. If service-side MDS CPU is available, correlate it separately.\n\nAzure Monitor labels may be aggregate-only (`ostnum=\"all\"`, `mdtnum=\"all\"`). In that case per-OST/per-MDT panels show filesystem aggregate series rather than physical target imbalance. Azure Monitor samples may also lag short workload runs; compare workload time with `*_sample_timestamp_seconds` and filesystem sample age before concluding that a workload produced no signal."
       },
       "pluginVersion": "10.4.0"
     }

@@ -247,6 +247,57 @@ HSM queue growth and action-error spikes correlate with archive/restore backpres
 
 ---
 
+## 3.4 Azure Monitor Dashboard Interpretation
+
+The Grafana dashboard in `deploy/grafana-dashboard-lustre.json` is an Azure Monitor / exporter view of AMLFS. It is useful for filesystem-level triage, but it is not a complete Lustre client or service-internal diagnostic view.
+
+### What the dashboard can show
+
+- OST and MDT capacity gauges.
+- Sampled OST and MDT latency and operation gauges.
+- Client read/write throughput and operation gauges.
+- Metadata amplification ratio.
+- Connected clients and client evictions.
+- HSM in-flight requests and action errors.
+- Exporter collection health and Azure Monitor sample freshness.
+
+### What the dashboard cannot prove by itself
+
+- MDS CPU saturation.
+- MDS queue depth, lock queue depth, or RPC queue depth.
+- Client-side LNet reconnects, retransmits, or privileged-port pressure.
+- D-state process counts or kernel hung-task symptoms.
+- CSI mount latency, mount errors, or pod churn.
+- Application or simulator-side operation counters.
+
+When service-side MDS CPU is available, treat it as the strongest signal for metadata-server saturation and correlate it with `MDTClientLatency`, `MDTClientOps`, metadata amplification, client write/read ops, connected clients, and evictions. Without MDS CPU, those Azure Monitor metrics are proxy signals only.
+
+### Aggregate-label caveat
+
+In many AMLFS environments, Azure Monitor exposes filesystem aggregate series rather than physical per-target series. The exporter represents this as labels such as:
+
+```text
+ostnum="all"
+mdtnum="all"
+```
+
+When labels are aggregate-only, dashboard panels grouped by `ostnum` or `mdtnum` do not show true physical OST or MDT imbalance. They show the aggregate filesystem series. Use client-side `lfs df -h` / `lfs df -i` from a mounted Lustre client if physical target imbalance must be measured.
+
+### Sampling and short-test caveat
+
+Azure Monitor-derived AMLFS metrics are sampled gauges, commonly representing a recent one-minute sample window. They can lag workload activity by several minutes. For short experiments or simulator runs, compare the workload start/end time with:
+
+```text
+azure_managed_lustre_ost_sample_timestamp_seconds
+azure_managed_lustre_mdt_sample_timestamp_seconds
+azure_managed_lustre_mdt_operation_sample_timestamp_seconds
+azure_managed_lustre_filesystem_sample_max_age_seconds
+```
+
+Low dashboard write throughput does not necessarily mean no workload ran. It can also mean the workload was metadata-bound, waiting on locks, or that the Azure Monitor sample window did not align with the workload burst. Do not apply `rate()` to Azure Monitor-derived ops or throughput gauges; they are already sampled values, not monotonically increasing counters.
+
+---
+
 # 4. File and Directory Layout Best Practices
 
 ## 4.1 File Striping Best Practices
