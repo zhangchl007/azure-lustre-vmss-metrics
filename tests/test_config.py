@@ -130,3 +130,19 @@ def test_leader_election_rejects_retry_period_not_less_than_renew(
 
     with pytest.raises(ValueError, match="RETRY_PERIOD"):
         load_settings()
+
+
+def test_leader_election_rejects_renew_within_retry_jitter_window(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # renew (6) > retry (5) but <= retry * 1.2 (6.0): accepted by the old
+    # settings check yet rejected by LeaderElectionConfig, which crashed the
+    # exporter at startup. load_settings must now reject it up front so the
+    # two validators agree.
+    monkeypatch.setenv("AZURE_SUBSCRIPTION_IDS", "sub-a")
+    monkeypatch.setenv("LEADER_ELECTION_LEASE_DURATION_SECONDS", "15")
+    monkeypatch.setenv("LEADER_ELECTION_RENEW_DEADLINE_SECONDS", "6")
+    monkeypatch.setenv("LEADER_ELECTION_RETRY_PERIOD_SECONDS", "5")
+
+    with pytest.raises(ValueError, match="RETRY_PERIOD"):
+        load_settings()

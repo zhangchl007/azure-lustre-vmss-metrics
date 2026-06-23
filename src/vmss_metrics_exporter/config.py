@@ -10,6 +10,11 @@ from dotenv import load_dotenv
 
 _PLACEHOLDER_SUBSCRIPTION = "00000000-0000-0000-0000-000000000000"
 
+# Must match ``leader_election._JITTER_FACTOR``. The renew deadline has to clear
+# the jittered retry period so a renewal gets at least one retry attempt before
+# the deadline; keep this in sync with ``LeaderElectionConfig.__post_init__``.
+_LEADER_ELECTION_JITTER_FACTOR = 1.2
+
 
 @dataclass(frozen=True, slots=True)
 class Settings:
@@ -198,11 +203,19 @@ def _load_leader_election_settings() -> dict[str, object]:
             f"({renew_deadline}) must be strictly less than "
             f"LEADER_ELECTION_LEASE_DURATION_SECONDS ({lease_duration})"
         )
-    if retry_period >= renew_deadline:
+    # Mirror LeaderElectionConfig.__post_init__: the renew deadline must clear
+    # the jittered retry period (retry_period * 1.2) so a renew has time for at
+    # least one retry before the deadline. A weaker ``retry_period < renew``
+    # check here let settings load succeed for values the dataclass later
+    # rejected, crashing the exporter during startup instead of failing fast.
+    if renew_deadline <= retry_period * _LEADER_ELECTION_JITTER_FACTOR:
         raise ValueError(
             "LEADER_ELECTION_RETRY_PERIOD_SECONDS "
-            f"({retry_period}) must be strictly less than "
-            f"LEADER_ELECTION_RENEW_DEADLINE_SECONDS ({renew_deadline})"
+            f"({retry_period}) must be small enough that "
+            "LEADER_ELECTION_RENEW_DEADLINE_SECONDS "
+            f"({renew_deadline}) exceeds retry_period * "
+            f"{_LEADER_ELECTION_JITTER_FACTOR} "
+            f"({retry_period * _LEADER_ELECTION_JITTER_FACTOR:.1f})"
         )
     return {
         "leader_election_enabled": enabled,
