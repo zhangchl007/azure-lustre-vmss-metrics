@@ -18,6 +18,22 @@ sys.modules["av_lustre_workload"] = av
 SPEC.loader.exec_module(av)
 
 
+def _write_sparse_file(path: Path, size: int) -> None:
+    """Create a file of exactly ``size`` bytes without allocating real blocks.
+
+    These tests only care about file *sizes* (for bucket classification and
+    byte-budget selection) and that reads succeed; they never assert on file
+    contents. Writing real bytes here allocated ~155 MiB per fixture instance
+    and, multiplied across the many tests that request ``dataset_tree``,
+    exhausted the tmpfs-backed ``/tmp`` (ENOSPC). A sparse file keeps the
+    reported ``st_size`` accurate while consuming negligible storage.
+    """
+    with path.open("wb") as handle:
+        if size > 0:
+            handle.seek(size - 1)
+            handle.write(b"\0")
+
+
 @pytest.fixture()
 def dataset_tree(tmp_path: Path) -> Path:
     root = tmp_path / "av-data"
@@ -36,9 +52,7 @@ def dataset_tree(tmp_path: Path) -> Path:
         "models/v1/tiny-001.bin": 100 * 1024,
     }
     for relative, size in files.items():
-        path = root / relative
-        with path.open("wb") as handle:
-            handle.write(b"\xab" * size)
+        _write_sparse_file(root / relative, size)
     return root
 
 
