@@ -7,6 +7,7 @@ This document is the detailed Prometheus metric catalog for the Azure VMSS, stan
 | Metric | Description |
 | --- | --- |
 | `azure_vmss_instance_count` | Actual VM count for each VMSS. |
+| `azure_vmss_instance_count_by_state` | Actual VMSS member count by normalized state (`running`, `stopped`, `deallocated`, `failed`, `unknown`). These state counts are additive visibility only; `azure_vmss_instance_count` remains the total count for cost visibility. |
 | `azure_vmss_capacity` | Desired VMSS capacity from Azure. |
 | `azure_vmss_info` | VMSS metadata. Value is always `1`. |
 | `azure_vmss_exporter_vmss_total` | Number of VMSS discovered in the latest successful collection. |
@@ -15,7 +16,7 @@ This document is the detailed Prometheus metric catalog for the Azure VMSS, stan
 | `azure_vmss_exporter_collection_errors_total` | VMSS collection error counter. |
 | `azure_vmss_exporter_is_leader` | Whether this replica is the active leader. `1` means leader, `0` means follower. |
 
-VMSS resource labels include `subscription_id`, `resource_group`, `vmss_name`, `location`, and `orchestration_mode`. `azure_vmss_info` also includes `vm_size` and `sku_tier`.
+VMSS resource labels include `subscription_id`, `resource_group`, `vmss_name`, `location`, and `orchestration_mode`. `azure_vmss_instance_count_by_state` also includes `state`. `azure_vmss_info` also includes `vm_size` and `sku_tier`.
 
 ## Standalone VM inventory metrics
 

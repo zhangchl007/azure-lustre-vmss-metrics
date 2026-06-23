@@ -100,12 +100,19 @@ def test_normalize_vmss_count_row() -> None:
             "vmSize": "Standard_D4s_v5",
             "skuTier": "Standard",
             "actualInstanceCount": "2",
+            "runningInstanceCount": "1",
+            "stoppedInstanceCount": "0",
+            "deallocatedInstanceCount": "1",
+            "failedInstanceCount": "0",
+            "unknownInstanceCount": "0",
             "capacity": "4",
         }
     )
 
     assert count.subscription_id == "sub-a"
     assert count.actual_instance_count == 2
+    assert count.running_instance_count == 1
+    assert count.deallocated_instance_count == 1
     assert count.capacity == 4
     assert count.vm_size == "Standard_D4s_v5"
     assert count.sku_tier == "Standard"

@@ -21,16 +21,19 @@ def test_collect_once_sets_metrics_and_removes_stale_series() -> None:
     first = [
         VmssCount(
             "sub-a", "rg-a", "vmss-a", "eastus", "Uniform", 3, 5,
+            running_instance_count=2, deallocated_instance_count=1,
             vm_size="Standard_D2s_v3", sku_tier="Standard",
         ),
         VmssCount(
             "sub-a", "rg-a", "vmss-b", "eastus", "Flexible", 1, 2,
+            failed_instance_count=1,
             vm_size="Standard_D4s_v5", sku_tier="Standard",
         ),
     ]
     second = [
         VmssCount(
             "sub-a", "rg-a", "vmss-a", "eastus", "Uniform", 4, 6,
+            running_instance_count=3, deallocated_instance_count=1,
             vm_size="Standard_D8s_v5", sku_tier="Standard",
         ),
     ]
@@ -47,6 +50,22 @@ def test_collect_once_sets_metrics_and_removes_stale_series() -> None:
     )
     assert f"azure_vmss_instance_count{{{expected_labels}}} 4.0" in metrics
     assert f"azure_vmss_capacity{{{expected_labels}}} 6.0" in metrics
+    expected_state_labels = (
+        'location="eastus",orchestration_mode="Uniform",resource_group="rg-a",'
+        'state="{state}",subscription_id="sub-a",vmss_name="vmss-a"'
+    )
+    assert (
+        "azure_vmss_instance_count_by_state{"
+        f"{expected_state_labels.format(state='running')}}} 3.0"
+    ) in metrics
+    assert (
+        "azure_vmss_instance_count_by_state{"
+        f"{expected_state_labels.format(state='deallocated')}}} 1.0"
+    ) in metrics
+    assert (
+        "azure_vmss_instance_count_by_state{"
+        f"{expected_state_labels.format(state='failed')}}} 0.0"
+    ) in metrics
     # New info metric reflects the latest sku.name and is stale-cleaned across reloads.
     assert (
         'azure_vmss_info{location="eastus",orchestration_mode="Uniform",'

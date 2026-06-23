@@ -43,13 +43,35 @@ Resources
     )
     | where isnotempty(parentId)
     | extend parentIdParts = split(parentId, '/')
+    | extend powerState = tostring(properties.extended.instanceView.powerState.displayStatus)
+    | extend provisioningState = tostring(properties.provisioningState)
+    | extend memberState = case(
+        provisioningState =~ 'Failed', 'failed',
+        powerState =~ 'VM running', 'running',
+        powerState =~ 'VM stopped', 'stopped',
+        powerState =~ 'VM deallocated', 'deallocated',
+        'unknown'
+    )
     | project
         subscriptionId,
         rgKey = tolower(tostring(parentIdParts[4])),
-        vmssKey = tolower(tostring(parentIdParts[8]))
-    | summarize actualInstanceCount = count() by subscriptionId, rgKey, vmssKey
+        vmssKey = tolower(tostring(parentIdParts[8])),
+        memberState
+    | summarize
+        actualInstanceCount = count(),
+        runningInstanceCount = countif(memberState == 'running'),
+        stoppedInstanceCount = countif(memberState == 'stopped'),
+        deallocatedInstanceCount = countif(memberState == 'deallocated'),
+        failedInstanceCount = countif(memberState == 'failed'),
+        unknownInstanceCount = countif(memberState == 'unknown')
+      by subscriptionId, rgKey, vmssKey
 ) on subscriptionId, rgKey, vmssKey
 | extend actualInstanceCount = toint(coalesce(actualInstanceCount, 0))
+| extend runningInstanceCount = toint(coalesce(runningInstanceCount, 0))
+| extend stoppedInstanceCount = toint(coalesce(stoppedInstanceCount, 0))
+| extend deallocatedInstanceCount = toint(coalesce(deallocatedInstanceCount, 0))
+| extend failedInstanceCount = toint(coalesce(failedInstanceCount, 0))
+| extend unknownInstanceCount = toint(coalesce(unknownInstanceCount, 0))
 | extend capacity = toint(coalesce(capacity, 0))
 | project
     subscriptionId,
@@ -60,6 +82,11 @@ Resources
     vmSize,
     skuTier,
     actualInstanceCount,
+    runningInstanceCount,
+    stoppedInstanceCount,
+    deallocatedInstanceCount,
+    failedInstanceCount,
+    unknownInstanceCount,
     capacity
 | order by subscriptionId asc, resourceGroup asc, vmssName asc
 """.strip()
@@ -299,6 +326,11 @@ def normalize_vmss_count_row(row: Mapping[str, Any]) -> VmssCount:
         sku_tier=_optional_str(row, "skuTier", default="unknown"),
         actual_instance_count=_int_value(row.get("actualInstanceCount"), default=0),
         capacity=_int_value(row.get("capacity"), default=0),
+        running_instance_count=_int_value(row.get("runningInstanceCount"), default=0),
+        stopped_instance_count=_int_value(row.get("stoppedInstanceCount"), default=0),
+        deallocated_instance_count=_int_value(row.get("deallocatedInstanceCount"), default=0),
+        failed_instance_count=_int_value(row.get("failedInstanceCount"), default=0),
+        unknown_instance_count=_int_value(row.get("unknownInstanceCount"), default=0),
     )
 
 

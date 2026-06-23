@@ -599,6 +599,41 @@
           "refId": "B",
           "format": "table",
           "instant": true
+        },
+        {
+          "expr": "(\n  max by (subscription_id, resource_group, vmss_name, location, orchestration_mode) (\n    azure_vmss_instance_count_by_state{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", vmss_name=~\"$vmss_name\", location=~\"$location\", state=\"running\"}\n  )\n  and on (subscription_id, resource_group, vmss_name, location, orchestration_mode)\n  topk($top_n,\n    max by (subscription_id, resource_group, vmss_name, location, orchestration_mode) (\n      azure_vmss_instance_count{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", vmss_name=~\"$vmss_name\", location=~\"$location\"}\n    )\n  )\n)",
+          "legendFormat": "__auto",
+          "refId": "C",
+          "format": "table",
+          "instant": true
+        },
+        {
+          "expr": "(\n  max by (subscription_id, resource_group, vmss_name, location, orchestration_mode) (\n    azure_vmss_instance_count_by_state{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", vmss_name=~\"$vmss_name\", location=~\"$location\", state=\"stopped\"}\n  )\n  and on (subscription_id, resource_group, vmss_name, location, orchestration_mode)\n  topk($top_n,\n    max by (subscription_id, resource_group, vmss_name, location, orchestration_mode) (\n      azure_vmss_instance_count{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", vmss_name=~\"$vmss_name\", location=~\"$location\"}\n    )\n  )\n)",
+          "legendFormat": "__auto",
+          "refId": "D",
+          "format": "table",
+          "instant": true
+        },
+        {
+          "expr": "(\n  max by (subscription_id, resource_group, vmss_name, location, orchestration_mode) (\n    azure_vmss_instance_count_by_state{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", vmss_name=~\"$vmss_name\", location=~\"$location\", state=\"deallocated\"}\n  )\n  and on (subscription_id, resource_group, vmss_name, location, orchestration_mode)\n  topk($top_n,\n    max by (subscription_id, resource_group, vmss_name, location, orchestration_mode) (\n      azure_vmss_instance_count{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", vmss_name=~\"$vmss_name\", location=~\"$location\"}\n    )\n  )\n)",
+          "legendFormat": "__auto",
+          "refId": "E",
+          "format": "table",
+          "instant": true
+        },
+        {
+          "expr": "(\n  max by (subscription_id, resource_group, vmss_name, location, orchestration_mode) (\n    azure_vmss_instance_count_by_state{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", vmss_name=~\"$vmss_name\", location=~\"$location\", state=\"failed\"}\n  )\n  and on (subscription_id, resource_group, vmss_name, location, orchestration_mode)\n  topk($top_n,\n    max by (subscription_id, resource_group, vmss_name, location, orchestration_mode) (\n      azure_vmss_instance_count{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", vmss_name=~\"$vmss_name\", location=~\"$location\"}\n    )\n  )\n)",
+          "legendFormat": "__auto",
+          "refId": "F",
+          "format": "table",
+          "instant": true
+        },
+        {
+          "expr": "(\n  max by (subscription_id, resource_group, vmss_name, location, orchestration_mode) (\n    azure_vmss_instance_count_by_state{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", vmss_name=~\"$vmss_name\", location=~\"$location\", state=\"unknown\"}\n  )\n  and on (subscription_id, resource_group, vmss_name, location, orchestration_mode)\n  topk($top_n,\n    max by (subscription_id, resource_group, vmss_name, location, orchestration_mode) (\n      azure_vmss_instance_count{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", vmss_name=~\"$vmss_name\", location=~\"$location\"}\n    )\n  )\n)",
+          "legendFormat": "__auto",
+          "refId": "G",
+          "format": "table",
+          "instant": true
         }
       ],
       "transformations": [
@@ -628,11 +663,21 @@
               "location": 4,
               "orchestration_mode": 5,
               "Value #A": 6,
-              "Value #B": 7
+              "Value #B": 7,
+              "Value #C": 8,
+              "Value #D": 9,
+              "Value #E": 10,
+              "Value #F": 11,
+              "Value #G": 12
             },
             "renameByName": {
               "Value #A": "instances",
               "Value #B": "capacity",
+              "Value #C": "running",
+              "Value #D": "stopped",
+              "Value #E": "deallocated",
+              "Value #F": "failed",
+              "Value #G": "unknown",
               "subscription_id": "subscription",
               "resource_group": "resource group",
               "vmss_name": "vmss",
@@ -678,6 +723,91 @@
                   "steps": [
                     {"color": "text", "value": null},
                     {"color": "green", "value": 1}
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {"id": "byName", "options": "running"},
+            "properties": [
+              {"id": "custom.cellOptions", "value": {"type": "color-text"}},
+              {"id": "color", "value": {"mode": "thresholds"}},
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {"color": "text", "value": null},
+                    {"color": "green", "value": 1}
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {"id": "byName", "options": "stopped"},
+            "properties": [
+              {"id": "custom.cellOptions", "value": {"type": "color-background"}},
+              {"id": "color", "value": {"mode": "thresholds"}},
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {"color": "transparent", "value": null},
+                    {"color": "orange", "value": 1}
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {"id": "byName", "options": "deallocated"},
+            "properties": [
+              {"id": "custom.cellOptions", "value": {"type": "color-background"}},
+              {"id": "color", "value": {"mode": "thresholds"}},
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {"color": "transparent", "value": null},
+                    {"color": "blue", "value": 1}
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {"id": "byName", "options": "failed"},
+            "properties": [
+              {"id": "custom.cellOptions", "value": {"type": "color-background"}},
+              {"id": "color", "value": {"mode": "thresholds"}},
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {"color": "transparent", "value": null},
+                    {"color": "red", "value": 1}
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {"id": "byName", "options": "unknown"},
+            "properties": [
+              {"id": "custom.cellOptions", "value": {"type": "color-background"}},
+              {"id": "color", "value": {"mode": "thresholds"}},
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {"color": "transparent", "value": null},
+                    {"color": "red", "value": 1}
                   ]
                 }
               }
@@ -750,55 +880,6 @@
             "colorMode": "value",
             "graphMode": "none",
             "textMode": "auto"
-          },
-          "pluginVersion": "10.4.0"
-        },
-        {
-          "type": "stat",
-          "id": 201,
-          "title": "Standalone VMs by power state",
-          "description": "Live count of standalone VMs in each normalized power state from azure_vm_power_state. Exactly one state series per VM is 1 at a time, so summing keeps totals consistent with 'Standalone VMs observed'.",
-          "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-          "gridPos": {"h": 4, "w": 18, "x": 6, "y": 63},
-          "targets": [
-            {
-              "expr": "sum by (state) (\n  (azure_vm_power_state{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\"} == 1)\n  * on (subscription_id, resource_group, vm_name) group_left ()\n  azure_vm_info{job=\"$job\", subscription_id=~\"$subscription_id\", resource_group=~\"$resource_group\", location=~\"$location\"}\n)",
-              "instant": true,
-              "legendFormat": "{{state}}",
-              "refId": "A"
-            }
-          ],
-          "fieldConfig": {
-            "defaults": {
-              "unit": "short",
-              "decimals": 0,
-              "color": {"mode": "palette-classic"}
-            },
-            "overrides": [
-              {
-                "matcher": {"id": "byName", "options": "running"},
-                "properties": [{"id": "color", "value": {"mode": "fixed", "fixedColor": "green"}}]
-              },
-              {
-                "matcher": {"id": "byName", "options": "stopped"},
-                "properties": [{"id": "color", "value": {"mode": "fixed", "fixedColor": "orange"}}]
-              },
-              {
-                "matcher": {"id": "byName", "options": "deallocated"},
-                "properties": [{"id": "color", "value": {"mode": "fixed", "fixedColor": "blue"}}]
-              },
-              {
-                "matcher": {"id": "byName", "options": "unknown"},
-                "properties": [{"id": "color", "value": {"mode": "fixed", "fixedColor": "red"}}]
-              }
-            ]
-          },
-          "options": {
-            "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false},
-            "colorMode": "value",
-            "graphMode": "none",
-            "textMode": "value_and_name",
-            "orientation": "horizontal"
           },
           "pluginVersion": "10.4.0"
         },
@@ -885,7 +966,8 @@
                   "zone": 6,
                   "os_type": 7,
                   "vm_id": 8
-                }
+                },
+                "renameByName": {"state": "status"}
               }
             },
             {
@@ -899,9 +981,9 @@
             },
             "overrides": [
               {
-                "matcher": {"id": "byName", "options": "state"},
+                "matcher": {"id": "byName", "options": "status"},
                 "properties": [
-                  {"id": "custom.cellOptions", "value": {"type": "color-text"}},
+                  {"id": "custom.cellOptions", "value": {"type": "color-background"}},
                   {
                     "id": "mappings",
                     "value": [

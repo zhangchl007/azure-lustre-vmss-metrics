@@ -5,6 +5,14 @@ from __future__ import annotations
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 
+VMSS_INSTANCE_STATES: tuple[str, ...] = (
+    "running",
+    "stopped",
+    "deallocated",
+    "failed",
+    "unknown",
+)
+
 
 @dataclass(frozen=True, slots=True)
 class VmssCount:
@@ -17,6 +25,11 @@ class VmssCount:
     orchestration_mode: str
     actual_instance_count: int
     capacity: int
+    running_instance_count: int = 0
+    stopped_instance_count: int = 0
+    deallocated_instance_count: int = 0
+    failed_instance_count: int = 0
+    unknown_instance_count: int = 0
     vm_size: str = "unknown"
     sku_tier: str = "unknown"
 
@@ -31,6 +44,23 @@ class VmssCount:
             self.location,
             self.orchestration_mode,
         )
+
+    @property
+    def state_counts(self) -> tuple[tuple[str, int], ...]:
+        """Return bounded VMSS member counts by state."""
+
+        return (
+            ("running", self.running_instance_count),
+            ("stopped", self.stopped_instance_count),
+            ("deallocated", self.deallocated_instance_count),
+            ("failed", self.failed_instance_count),
+            ("unknown", self.unknown_instance_count),
+        )
+
+    def state_label_values(self, state: str) -> tuple[str, str, str, str, str, str]:
+        """Return labels for `azure_vmss_instance_count_by_state`."""
+
+        return (*self.label_values, state)
 
     @property
     def info_label_values(self) -> tuple[str, str, str, str, str, str, str]:

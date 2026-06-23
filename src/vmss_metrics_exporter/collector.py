@@ -13,6 +13,7 @@ from prometheus_client.registry import CollectorRegistry
 
 from .models import (
     STANDALONE_VM_POWER_STATES,
+    VMSS_INSTANCE_STATES,
     ManagedLustreCollectionResult,
     ManagedLustreFilesystem,
     ManagedLustreFilesystemAggregateMetric,
@@ -44,6 +45,8 @@ VMSS_INFO_LABELS = (
     "vm_size",
     "sku_tier",
 )
+
+VMSS_INSTANCE_STATE_LABELS = (*VMSS_LABELS, "state")
 
 LUSTRE_OST_LABELS = (
     "subscription_id",
@@ -143,6 +146,7 @@ class VmssMetricsExporter:
         self._lustre_thread: threading.Thread | None = None
         self._metric_lock = threading.Lock()
         self._active_labelsets: set[tuple[str, str, str, str, str]] = set()
+        self._active_state_labelsets: set[tuple[str, str, str, str, str, str]] = set()
         self._active_info_labelsets: set[tuple[str, str, str, str, str, str, str]] = set()
         self._active_lustre_ost_labelsets: set[tuple[str, str, str, str, str]] = set()
         self._active_lustre_ost_operation_labelsets: set[
@@ -181,6 +185,15 @@ class VmssMetricsExporter:
             "azure_vmss_capacity",
             "Desired Azure VM Scale Set capacity from the parent VMSS resource sku.capacity.",
             VMSS_LABELS,
+            registry=effective_registry,
+        )
+        self.instance_count_by_state = Gauge(
+            "azure_vmss_instance_count_by_state",
+            (
+                "Azure VM Scale Set member instance count by normalized "
+                "power/provisioning state from Azure Resource Graph."
+            ),
+            VMSS_INSTANCE_STATE_LABELS,
             registry=effective_registry,
         )
         self.info = Gauge(
@@ -747,6 +760,7 @@ class VmssMetricsExporter:
             for gauge in (
                 self.instance_count,
                 self.capacity,
+                self.instance_count_by_state,
                 self.info,
                 self.lustre_ost_bytes_available,
                 self.lustre_ost_bytes_used,
@@ -793,6 +807,7 @@ class VmssMetricsExporter:
             ):
                 gauge.clear()
             self._active_labelsets = set()
+            self._active_state_labelsets = set()
             self._active_info_labelsets = set()
             self._active_lustre_ost_labelsets = set()
             self._active_lustre_ost_operation_labelsets = set()
@@ -893,6 +908,11 @@ class VmssMetricsExporter:
 
     def _update_metrics(self, counts: Sequence[VmssCount]) -> bool:
         new_labelsets = {count.label_values for count in counts}
+        new_state_labelsets = {
+            count.state_label_values(state)
+            for count in counts
+            for state in VMSS_INSTANCE_STATES
+        }
         new_info_labelsets = {count.info_label_values for count in counts}
         with self._metric_lock:
             if not self._can_write_metrics_locked():
@@ -902,6 +922,9 @@ class VmssMetricsExporter:
                     self.instance_count.remove(*stale)
                 with suppress(KeyError):
                     self.capacity.remove(*stale)
+            for stale_state in self._active_state_labelsets - new_state_labelsets:
+                with suppress(KeyError):
+                    self.instance_count_by_state.remove(*stale_state)
             for stale_info in self._active_info_labelsets - new_info_labelsets:
                 with suppress(KeyError):
                     self.info.remove(*stale_info)
@@ -910,9 +933,14 @@ class VmssMetricsExporter:
                 labels = count.label_values
                 self.instance_count.labels(*labels).set(count.actual_instance_count)
                 self.capacity.labels(*labels).set(count.capacity)
+                for state, value in count.state_counts:
+                    self.instance_count_by_state.labels(
+                        *count.state_label_values(state)
+                    ).set(value)
                 self.info.labels(*count.info_label_values).set(1)
 
             self._active_labelsets = new_labelsets
+            self._active_state_labelsets = new_state_labelsets
             self._active_info_labelsets = new_info_labelsets
             return True
 
